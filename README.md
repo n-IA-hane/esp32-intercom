@@ -305,6 +305,39 @@ views:
         hours_to_show: 24
 ```
 
+### Step 6: Doorbell Notification (Optional)
+
+Create an automation to receive push notifications when someone rings the doorbell:
+
+```yaml
+alias: Doorbell Notification
+description: Send push notification when doorbell rings - tap to open intercom
+triggers:
+  - trigger: event
+    event_type: esphome.doorbell_ring
+conditions: []
+actions:
+  - action: notify.mobile_app_YOUR_PHONE
+    data:
+      title: Doorbell
+      message: Someone is at the door!
+      data:
+        clickAction: /intercom/intercom
+        channel: doorbell
+        importance: high
+        ttl: 0
+        priority: high
+        actions:
+          - action: URI
+            title: Open Intercom
+            uri: /intercom/intercom
+          - action: ANSWER
+            title: Answer
+mode: single
+```
+
+Replace `notify.mobile_app_YOUR_PHONE` with your actual mobile app notification service.
+
 ## Display States
 
 The round display shows different colors and text based on the current state:

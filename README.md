@@ -238,6 +238,10 @@ The WebRTC Camera custom card is required to display the audio stream with bidir
 
 ### Step 5: Create the Dashboard
 
+<p align="center">
+  <img src="readme_img/dashboard.jpg" width="400" alt="Home Assistant Dashboard"/>
+</p>
+
 Create a new dashboard or add this card to an existing one:
 
 ```yaml

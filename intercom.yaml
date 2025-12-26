@@ -196,6 +196,24 @@ binary_sensor:
     id: call_active
     lambda: return id(intercom_component).is_streaming();
 
+  # Touch sensor on display - resets countdown when touched
+  - platform: gpio
+    pin:
+      number: GPIO12
+      mode: INPUT_PULLUP
+      inverted: true
+    id: touch_input
+    name: "Display Touch"
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: return id(intercom_component).is_streaming();
+            then:
+              - lambda: |-
+                  id(countdown_seconds) = 60;
+                  ESP_LOGI("touch", "Countdown reset by touch");
+
 # =============================================================================
 # SWITCHES
 # =============================================================================
@@ -213,12 +231,20 @@ switch:
           id: intercom_component
     lambda: return id(intercom_component).is_streaming();
 
+# =============================================================================
+# SELECT FOR HANGUP MODE
+# =============================================================================
+select:
   - platform: template
-    name: "Auto Hangup"
-    id: auto_hangup_switch
-    icon: "mdi:timer-off"
+    name: "Hangup Mode"
+    id: hangup_mode
+    icon: "mdi:phone-hangup"
     optimistic: true
-    restore_mode: RESTORE_DEFAULT_ON
+    restore_value: true
+    options:
+      - "Automatic"
+      - "Manual"
+    initial_option: "Automatic"
 
 # =============================================================================
 # INTERVAL FOR COUNTDOWN AND BLINKING
@@ -232,8 +258,8 @@ interval:
   - interval: 1s
     then:
       - lambda: |-
-          // Countdown logic when streaming and auto-hangup is enabled
-          if (id(intercom_component).is_streaming() && id(auto_hangup_switch).state) {
+          // Countdown logic when streaming and hangup mode is "Automatic"
+          if (id(intercom_component).is_streaming() && id(hangup_mode).state == "Automatic") {
             if (id(countdown_seconds) > 0) {
               id(countdown_seconds) -= 1;
               ESP_LOGD("countdown", "Countdown: %d seconds", id(countdown_seconds));
@@ -467,8 +493,8 @@ display:
         it.print(cx, cy, id(font_state), text_color, TextAlign::CENTER, state_text);
       }
 
-      // Show countdown when streaming and auto-hangup enabled
-      if (is_streaming && id(auto_hangup_switch).state) {
+      // Show countdown when streaming and hangup mode is "Automatic"
+      if (is_streaming && id(hangup_mode).state == "Automatic") {
         char countdown_buf[16];
         int secs = id(countdown_seconds);
         snprintf(countdown_buf, sizeof(countdown_buf), "Auto: %02d:%02d", secs / 60, secs % 60);

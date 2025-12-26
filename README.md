@@ -95,6 +95,15 @@ Edit `intercom.yaml` and update:
 
 ### 4. Flash the Firmware
 
+#### Option A: Using ESPHome Add-on (Recommended for HA OS users)
+
+1. Open the **ESPHome Dashboard** add-on in Home Assistant
+2. Click **+ New Device** → **Continue** → **Skip this step**
+3. Copy the contents of `intercom.yaml` and the `custom_components` folder to your ESPHome config directory
+4. Edit the device and click **Install**
+
+#### Option B: Using ESPHome CLI (Standalone)
+
 ```bash
 # Create Python virtual environment
 python3 -m venv venv

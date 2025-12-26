@@ -465,7 +465,7 @@ void UDPIntercom::start_streaming() {
 }
 
 void UDPIntercom::stop_streaming() {
-  if (!this->is_streaming() && this->state_ != IntercomState::RINGING) {
+  if (!this->is_streaming() && this->state_ != IntercomState::RINGING && this->state_ != IntercomState::ERROR) {
     ESP_LOGW(TAG, "Not streaming");
     return;
   }

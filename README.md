@@ -14,6 +14,12 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 >
 > — Claude, your friendly neighborhood AI assistant
 
+## Demo
+
+https://github.com/n-IA-hane/esphome-intercom/raw/master/readme_img/call.mp4
+
+> Click the link above to watch a full doorbell ring → answer → hangup demo
+
 ## Features
 
 - **Full Duplex Audio**: Simultaneous microphone and speaker operation
@@ -290,6 +296,12 @@ The round display shows different colors and text based on the current state:
 | RINGING | Orange | Blue (blinking) | Doorbell was pressed |
 | STREAMING | Green | Red | Active call with countdown |
 | ERROR | Red | White | Something went wrong |
+
+<p align="center">
+  <img src="readme_img/idle.jpg" width="200" alt="IDLE state"/>
+  <img src="readme_img/ringing.jpg" width="200" alt="RINGING state"/>
+  <img src="readme_img/streaming.jpg" width="200" alt="STREAMING state"/>
+</p>
 
 When streaming with "Automatic" hangup mode, a countdown timer is displayed (e.g., "Auto: 00:45").
 

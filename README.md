@@ -113,12 +113,25 @@ This section covers setting up go2rtc and the WebRTC Camera card for different H
 
 ### Step 1: Install go2rtc
 
-#### Option A: Home Assistant OS / Supervised (Add-on)
+#### Option A: Home Assistant OS / Supervised (Built-in since 2024.11)
 
-1. Go to **Settings → Add-ons → Add-on Store**
-2. Search for **"go2rtc"** and install it
-3. The add-on configuration file is at `/addon_configs/go2rtc/go2rtc.yaml`
-4. After editing the config, restart the add-on
+Since Home Assistant 2024.11, **go2rtc is built-in** - no add-on needed! FFmpeg with all codecs (opus, alaw, etc.) is included.
+
+Add this to your `configuration.yaml`:
+
+```yaml
+go2rtc:
+  streams:
+    intercom:
+      # Audio IN: ESP32 microphone -> browser
+      - "exec:ffmpeg -f s16le -ar 16000 -ac 1 -i udp://0.0.0.0:12345?timeout=5000000 -c:a libopus -b:a 48k -f mpegts -"
+      # Audio OUT: browser microphone -> ESP32 speaker (CRITICAL: -re flag!)
+      - "exec:ffmpeg -re -f alaw -ar 8000 -ac 1 -i pipe: -f s16le -ar 16000 -ac 1 udp://ESP32_IP:12346?pkt_size=512#backchannel=1"
+```
+
+Replace `ESP32_IP` with your ESP32's IP address, then restart Home Assistant.
+
+> **Note**: If you're on an older HA version, you can still use the go2rtc add-on from the Add-on Store.
 
 #### Option B: Docker / Container / LXC
 
@@ -175,9 +188,11 @@ services:
       - ./go2rtc.yaml:/config/go2rtc.yaml
 ```
 
-### Step 2: Configure go2rtc
+### Step 2: Configure go2rtc (Docker/LXC only)
 
-Create or edit your `go2rtc.yaml` with this configuration:
+> **HA OS users**: Skip this step - you already configured go2rtc in `configuration.yaml` above.
+
+For Docker/LXC installations, create or edit your `go2rtc.yaml`:
 
 ```yaml
 streams:

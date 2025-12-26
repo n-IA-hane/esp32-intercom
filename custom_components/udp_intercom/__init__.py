@@ -8,7 +8,7 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID
 from esphome import automation, pins
 
-CODEOWNERS = ["@daniele"]
+CODEOWNERS = ["@n-IA-hane"]
 DEPENDENCIES = []
 
 CONF_SERVER_IP = "server_ip"

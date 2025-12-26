@@ -452,6 +452,11 @@ After flashing, the following entities will be available:
 | `sensor.intercom_tx_packets` | Sensor | Transmitted packets |
 | `sensor.intercom_rx_packets` | Sensor | Received packets |
 
+## Roadmap / TODO
+
+- [ ] **Echo Cancellation**: Experiment with ESP-IDF's AEC (Acoustic Echo Cancellation). Initial tests caused audio glitches - needs more investigation
+- [ ] **Video Intercom**: Add camera support using ESP32-S3-CAM module. Goal is full video + two-way audio streaming via WebRTC
+
 ## License
 
 MIT License - Feel free to use, modify, and distribute!

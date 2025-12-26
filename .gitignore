@@ -1,0 +1,29 @@
+# ESPHome build artifacts
+.esphome/
+.pioenvs/
+.pio/
+
+# Secrets - never commit!
+secrets.yaml
+
+# Python virtual environment
+venv/
+
+# Backups
+backup_*/
+
+# System files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Claude documentation (local project notes)
+claude.md
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Test files
+troiaio-palletta.yaml

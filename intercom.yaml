@@ -1,0 +1,416 @@
+# =============================================================================
+# ESP32-S3 UDP INTERCOM - Full Duplex Audio with Home Assistant
+# =============================================================================
+# Hardware: Xiaozhi Ball V3 (ESP32-S3 + ES8311 codec + GC9A01A display)
+# Protocol: Raw PCM 16-bit, 16kHz, mono over UDP
+# TX: ESP32 -> Home Assistant on port 12345
+# RX: Home Assistant -> ESP32 on port 12346
+#
+# Created by Claude (Anthropic) for n-IA-hane
+# https://github.com/n-IA-hane/esp32-intercom
+# =============================================================================
+
+substitutions:
+  name: intercom
+  friendly_name: Intercom
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.5.0
+  name_add_mac_suffix: false
+  on_boot:
+    priority: 600
+    then:
+      - lambda: id(boot_complete) = false;
+      - delay: 3s
+      - lambda: id(boot_complete) = true;
+      - lambda: |-
+          // Apply saved volume on boot
+          float vol = id(speaker_volume).state / 100.0;
+          id(es8311_dac).set_volume(vol);
+          ESP_LOGI("boot", "Applied saved volume: %.0f%%", id(speaker_volume).state);
+      - component.update: main_display
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+api:
+  id: api_server
+
+ota:
+  - platform: esphome
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # use_address: 192.168.1.31  # Uncomment and set your static IP
+  ap:
+    ssid: "Intercom Fallback"
+
+# =============================================================================
+# I2C FOR ES8311 CODEC CONTROL
+# =============================================================================
+i2c:
+  sda: GPIO15
+  scl: GPIO14
+  scan: true
+  id: bus_a
+
+# ES8311 DAC configuration via I2C (volume control)
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    bits_per_sample: 16bit
+    sample_rate: 16000
+
+# =============================================================================
+# UDP INTERCOM COMPONENT (Direct I2S Full Duplex)
+# =============================================================================
+external_components:
+  - source:
+      type: local
+      path: custom_components
+
+udp_intercom:
+  id: intercom_component
+  server_ip: "192.168.1.10"      # Your Home Assistant IP
+  server_port: 12345             # UDP port for mic audio (ESP32 -> HA)
+  listen_port: 12346             # UDP port for speaker audio (HA -> ESP32)
+  sample_rate: 16000
+  # I2S pins for Xiaozhi Ball V3
+  i2s_lrclk_pin: GPIO45
+  i2s_bclk_pin: GPIO9
+  i2s_mclk_pin: GPIO16
+  i2s_din_pin: GPIO10            # Microphone data in
+  i2s_dout_pin: GPIO8            # Speaker data out
+  speaker_enable_pin: GPIO46
+  on_ring:
+    - homeassistant.event:
+        event: esphome.doorbell_ring
+        data:
+          device: ${name}
+    - lambda: id(main_display).update();
+    # Blinking orange LED for ringing
+    - light.turn_on:
+        id: status_led
+        brightness: 100%
+        red: 1
+        green: 0.6
+        blue: 0
+        effect: "Fast Pulse"
+  on_call_start:
+    - lambda: id(main_display).update();
+    # Solid green LED for streaming
+    - light.turn_on:
+        id: status_led
+        brightness: 100%
+        red: 0
+        green: 1
+        blue: 0
+        effect: "None"
+  on_call_end:
+    - lambda: id(main_display).update();
+    # Turn off LED when call ends
+    - light.turn_off: status_led
+
+# =============================================================================
+# SENSORS
+# =============================================================================
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_db
+    update_interval: 10s
+    entity_category: diagnostic
+
+  - platform: template
+    name: "TX Packets"
+    id: tx_packets
+    accuracy_decimals: 0
+    update_interval: 1s
+    lambda: return id(intercom_component).get_tx_packets();
+    entity_category: diagnostic
+
+  - platform: template
+    name: "RX Packets"
+    id: rx_packets
+    accuracy_decimals: 0
+    update_interval: 1s
+    lambda: return id(intercom_component).get_rx_packets();
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: template
+    name: "Intercom State"
+    id: intercom_state_text
+    update_interval: 1s
+    lambda: |-
+      auto state = id(intercom_component).get_state();
+      // Returns translated state text - wrap in std::string for ESPHome
+      return {std::string(id(intercom_component).get_state_text(state))};
+
+# =============================================================================
+# BINARY SENSORS
+# =============================================================================
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    id: doorbell_button
+    name: "Doorbell Button"
+    on_press:
+      - udp_intercom.ring_doorbell:
+          id: intercom_component
+    on_multi_click:
+      - timing:
+          - ON for at least 3s
+        then:
+          - udp_intercom.stop_streaming:
+              id: intercom_component
+
+  - platform: template
+    name: "Call Active"
+    id: call_active
+    lambda: return id(intercom_component).is_streaming();
+
+# =============================================================================
+# SWITCHES
+# =============================================================================
+switch:
+  - platform: template
+    name: "Streaming"
+    id: streaming_switch
+    icon: "mdi:phone"
+    turn_on_action:
+      - udp_intercom.start_streaming:
+          id: intercom_component
+    turn_off_action:
+      - udp_intercom.stop_streaming:
+          id: intercom_component
+    lambda: return id(intercom_component).is_streaming();
+
+# =============================================================================
+# SPEAKER VOLUME CONTROL
+# =============================================================================
+number:
+  - platform: template
+    name: "Speaker Volume"
+    id: speaker_volume
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 60
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    icon: "mdi:volume-high"
+    set_action:
+      - lambda: |-
+          float vol = x / 100.0;  // Convert 0-100 to 0.0-1.0
+          id(es8311_dac).set_volume(vol);
+          ESP_LOGI("volume", "Speaker volume set to %.0f%% (%.2f)", x, vol);
+
+# =============================================================================
+# BUTTONS
+# =============================================================================
+button:
+  - platform: template
+    name: "Ring Doorbell"
+    icon: "mdi:bell-ring"
+    on_press:
+      - udp_intercom.ring_doorbell:
+          id: intercom_component
+
+  - platform: template
+    name: "Reset Counters"
+    icon: "mdi:counter"
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(intercom_component).reset_counters();
+
+# =============================================================================
+# OUTPUT & LIGHTS
+# =============================================================================
+output:
+  - platform: ledc
+    pin: GPIO42
+    id: backlight_output
+    inverted: true
+
+light:
+  - platform: monochromatic
+    id: screen_backlight
+    name: "Screen Backlight"
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "Status LED"
+    pin: GPIO48
+    chipset: WS2812
+    num_leds: 1
+    rgb_order: grb
+    effects:
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 0.3s
+          update_interval: 0.3s
+          min_brightness: 0%
+          max_brightness: 100%
+
+# =============================================================================
+# GLOBALS
+# =============================================================================
+globals:
+  - id: boot_complete
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+# =============================================================================
+# FONTS
+# =============================================================================
+font:
+  - file:
+      type: gfonts
+      family: Roboto
+      weight: 700
+    id: font_title
+    size: 24
+  - file:
+      type: gfonts
+      family: Roboto
+      weight: 500
+    id: font_state
+    size: 32
+  - file:
+      type: gfonts
+      family: Roboto Mono
+      weight: 400
+    id: font_debug
+    size: 14
+
+# =============================================================================
+# COLORS
+# =============================================================================
+color:
+  - id: color_idle
+    hex: "2196F3"     # Blue
+  - id: color_ringing
+    hex: "FF9800"     # Orange
+  - id: color_streaming
+    hex: "4CAF50"     # Green
+  - id: color_error
+    hex: "F44336"     # Red
+  - id: color_white
+    hex: "FFFFFF"
+  - id: color_gray
+    hex: "888888"
+
+# =============================================================================
+# DISPLAY (GC9A01A 240x240 round)
+# =============================================================================
+spi:
+  - id: spi_bus
+    clk_pin: GPIO4
+    mosi_pin: GPIO2
+
+display:
+  - platform: ili9xxx
+    id: main_display
+    model: GC9A01A
+    invert_colors: true
+    data_rate: 40MHz
+    cs_pin: GPIO5
+    dc_pin: GPIO47
+    reset_pin: GPIO38
+    update_interval: 500ms
+    dimensions:
+      height: 240
+      width: 240
+    lambda: |-
+      const int w = it.get_width();
+      const int h = it.get_height();
+      const int cx = w / 2;
+      const int cy = h / 2;
+
+      // Get current state
+      auto state = id(intercom_component).get_state();
+
+      // Background color and text based on state
+      Color bg_color;
+      const char* state_text = id(intercom_component).get_state_text(state);
+
+      switch (state) {
+        case udp_intercom::IntercomState::IDLE:
+          bg_color = id(color_idle);
+          break;
+        case udp_intercom::IntercomState::RINGING:
+          bg_color = id(color_ringing);
+          break;
+        case udp_intercom::IntercomState::STREAMING_DUPLEX:
+        case udp_intercom::IntercomState::STREAMING_IN:
+        case udp_intercom::IntercomState::STREAMING_OUT:
+          bg_color = id(color_streaming);
+          break;
+        case udp_intercom::IntercomState::ERROR:
+          bg_color = id(color_error);
+          break;
+        default:
+          bg_color = id(color_gray);
+      }
+
+      it.fill(bg_color);
+
+      // Title "INTERCOM" at top
+      it.print(cx, 30, id(font_title), id(color_white), TextAlign::CENTER, "INTERCOM");
+
+      // State in center
+      it.print(cx, cy, id(font_state), id(color_white), TextAlign::CENTER, state_text);
+
+      // Debug info at bottom
+      // TX/RX packets
+      char buf[32];
+      snprintf(buf, sizeof(buf), "TX:%lu RX:%lu",
+               (unsigned long)id(intercom_component).get_tx_packets(),
+               (unsigned long)id(intercom_component).get_rx_packets());
+      it.print(cx, h - 55, id(font_debug), id(color_white), TextAlign::CENTER, buf);
+
+      // WiFi signal
+      float wifi_pct = 0;
+      if (id(wifi_signal_db).has_state()) {
+        // Convert dBm to percentage (approx)
+        float dbm = id(wifi_signal_db).state;
+        if (dbm >= -50) wifi_pct = 100;
+        else if (dbm <= -100) wifi_pct = 0;
+        else wifi_pct = 2 * (dbm + 100);
+      }
+      snprintf(buf, sizeof(buf), "WiFi: %.0f%%", wifi_pct);
+      it.print(cx, h - 35, id(font_debug), id(color_white), TextAlign::CENTER, buf);
+
+      // API status
+      const char* api_status = id(api_server).is_connected() ? "HA: OK" : "HA: DISC";
+      it.print(cx, h - 15, id(font_debug), id(color_white), TextAlign::CENTER, api_status);

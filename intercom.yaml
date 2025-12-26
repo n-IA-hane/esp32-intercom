@@ -118,7 +118,9 @@ udp_intercom:
         blue: 0
         effect: "Fast Pulse"
   on_call_start:
-    - lambda: id(main_display).update();
+    - lambda: |-
+        id(countdown_seconds) = 60;  // Reset countdown on call start
+        id(main_display).update();
     # Solid green LED for streaming
     - light.turn_on:
         id: status_led
@@ -203,12 +205,44 @@ switch:
     id: streaming_switch
     icon: "mdi:phone"
     turn_on_action:
+      - lambda: id(countdown_seconds) = 60;  # Reset countdown
       - udp_intercom.start_streaming:
           id: intercom_component
     turn_off_action:
       - udp_intercom.stop_streaming:
           id: intercom_component
     lambda: return id(intercom_component).is_streaming();
+
+  - platform: template
+    name: "Auto Hangup"
+    id: auto_hangup_switch
+    icon: "mdi:timer-off"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+# =============================================================================
+# INTERVAL FOR COUNTDOWN AND BLINKING
+# =============================================================================
+interval:
+  - interval: 500ms
+    then:
+      - lambda: |-
+          // Toggle blink state for RINGING text animation
+          id(blink_state) = !id(blink_state);
+  - interval: 1s
+    then:
+      - lambda: |-
+          // Countdown logic when streaming and auto-hangup is enabled
+          if (id(intercom_component).is_streaming() && id(auto_hangup_switch).state) {
+            if (id(countdown_seconds) > 0) {
+              id(countdown_seconds) -= 1;
+              ESP_LOGD("countdown", "Countdown: %d seconds", id(countdown_seconds));
+            }
+            if (id(countdown_seconds) <= 0) {
+              ESP_LOGI("countdown", "Auto hangup triggered!");
+              id(intercom_component).stop_streaming();
+            }
+          }
 
 # =============================================================================
 # SPEAKER VOLUME CONTROL
@@ -241,6 +275,14 @@ button:
     on_press:
       - udp_intercom.ring_doorbell:
           id: intercom_component
+
+  - platform: template
+    name: "Extend Call"
+    icon: "mdi:timer-plus"
+    on_press:
+      - lambda: |-
+          id(countdown_seconds) = 60;
+          ESP_LOGI("countdown", "Countdown reset to 60 seconds");
 
   - platform: template
     name: "Reset Counters"
@@ -289,6 +331,14 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  - id: countdown_seconds
+    type: int
+    restore_value: false
+    initial_value: "60"
+  - id: blink_state
+    type: bool
+    restore_value: false
+    initial_value: "true"
 
 # =============================================================================
 # FONTS
@@ -317,18 +367,28 @@ font:
 # COLORS
 # =============================================================================
 color:
+  # Background colors
   - id: color_idle
-    hex: "2196F3"     # Blue
+    hex: "2196F3"     # Blue background
   - id: color_ringing
-    hex: "FF9800"     # Orange
+    hex: "FF9800"     # Orange background
   - id: color_streaming
-    hex: "4CAF50"     # Green
+    hex: "4CAF50"     # Green background
   - id: color_error
-    hex: "F44336"     # Red
+    hex: "F44336"     # Red background
+  # Text colors
+  - id: color_text_idle
+    hex: "00FF00"     # Green text for IDLE
+  - id: color_text_ringing
+    hex: "0080FF"     # Blue text for RINGING
+  - id: color_text_streaming
+    hex: "FF0000"     # Red text for STREAMING
   - id: color_white
     hex: "FFFFFF"
   - id: color_gray
     hex: "888888"
+  - id: color_black
+    hex: "000000"
 
 # =============================================================================
 # DISPLAY (GC9A01A 240x240 round)
@@ -347,7 +407,7 @@ display:
     cs_pin: GPIO5
     dc_pin: GPIO47
     reset_pin: GPIO38
-    update_interval: 500ms
+    update_interval: 250ms
     dimensions:
       height: 240
       width: 240
@@ -360,27 +420,35 @@ display:
       // Get current state
       auto state = id(intercom_component).get_state();
 
-      // Background color and text based on state
+      // Background and text colors based on state
       Color bg_color;
+      Color text_color;
       const char* state_text = id(intercom_component).get_state_text(state);
+      bool is_streaming = false;
 
       switch (state) {
         case udp_intercom::IntercomState::IDLE:
           bg_color = id(color_idle);
+          text_color = id(color_text_idle);      // Green text
           break;
         case udp_intercom::IntercomState::RINGING:
           bg_color = id(color_ringing);
+          text_color = id(color_text_ringing);   // Blue text (will blink)
           break;
         case udp_intercom::IntercomState::STREAMING_DUPLEX:
         case udp_intercom::IntercomState::STREAMING_IN:
         case udp_intercom::IntercomState::STREAMING_OUT:
           bg_color = id(color_streaming);
+          text_color = id(color_text_streaming); // Red text
+          is_streaming = true;
           break;
         case udp_intercom::IntercomState::ERROR:
           bg_color = id(color_error);
+          text_color = id(color_white);
           break;
         default:
           bg_color = id(color_gray);
+          text_color = id(color_white);
       }
 
       it.fill(bg_color);
@@ -388,11 +456,26 @@ display:
       // Title "INTERCOM" at top
       it.print(cx, 30, id(font_title), id(color_white), TextAlign::CENTER, "INTERCOM");
 
-      // State in center
-      it.print(cx, cy, id(font_state), id(color_white), TextAlign::CENTER, state_text);
+      // State text in center - blink if RINGING
+      if (state == udp_intercom::IntercomState::RINGING) {
+        // Blinking text for RINGING
+        if (id(blink_state)) {
+          it.print(cx, cy, id(font_state), text_color, TextAlign::CENTER, state_text);
+        }
+        // When blink_state is false, don't print (text disappears)
+      } else {
+        it.print(cx, cy, id(font_state), text_color, TextAlign::CENTER, state_text);
+      }
+
+      // Show countdown when streaming and auto-hangup enabled
+      if (is_streaming && id(auto_hangup_switch).state) {
+        char countdown_buf[16];
+        int secs = id(countdown_seconds);
+        snprintf(countdown_buf, sizeof(countdown_buf), "Auto: %02d:%02d", secs / 60, secs % 60);
+        it.print(cx, cy + 35, id(font_debug), id(color_white), TextAlign::CENTER, countdown_buf);
+      }
 
       // Debug info at bottom
-      // TX/RX packets
       char buf[32];
       snprintf(buf, sizeof(buf), "TX:%lu RX:%lu",
                (unsigned long)id(intercom_component).get_tx_packets(),
@@ -402,7 +485,6 @@ display:
       // WiFi signal
       float wifi_pct = 0;
       if (id(wifi_signal_db).has_state()) {
-        // Convert dBm to percentage (approx)
         float dbm = id(wifi_signal_db).state;
         if (dbm >= -50) wifi_pct = 100;
         else if (dbm <= -100) wifi_pct = 0;

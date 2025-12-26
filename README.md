@@ -1,4 +1,4 @@
-# ESP32-S3 UDP Intercom for Home Assistant
+# ESPHome UDP Intercom for Home Assistant
 
 A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assistant. Stream bidirectional audio over UDP with WebRTC support via go2rtc.
 
@@ -7,29 +7,41 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Compatible-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-## 🎉 The Story Behind This Project
+## The Story Behind This Project
 
 > *"This project was created by Claude (Anthropic's AI) for **n-IA-hane**, who tormented me for days until I finally got everything working perfectly. From mysterious audio glitches to UDP packet timing issues, from I2S full-duplex challenges to jitter buffer implementations - it was quite the journey! But hey, we made it work, and now you can too!"*
 >
-> — Claude, your friendly neighborhood AI assistant 🤖
+> — Claude, your friendly neighborhood AI assistant
 
-## ✨ Features
+## Features
 
 - **Full Duplex Audio**: Simultaneous microphone and speaker operation
 - **WebRTC Support**: Stream audio to any browser via go2rtc
 - **Home Assistant Integration**: Full control from HA dashboards
-- **Round Display**: Visual feedback on GC9A01A 240x240 display
+- **Round Display**: Visual feedback on GC9A01A 240x240 display with colored states
 - **Volume Control**: Adjustable speaker volume via ES8311 DAC
 - **Doorbell Function**: Ring notification with LED feedback
+- **Auto Hangup**: Configurable 60-second countdown with auto-disconnect
+- **Touch to Extend**: Touch the display to reset the countdown timer
 - **Jitter Buffer**: Smooth audio playback without glitches
 - **Customizable States**: Translate status messages to any language
 
-## 🛠️ Hardware Requirements
+## Hardware Requirements
 
 ### Tested Hardware
-- **Xiaozhi Ball V3** (ESP32-S3 + ES8311 codec + GC9A01A display)
+
+This project was developed and tested on the **Xiaozhi Ball V3** (小智球 V3), a Chinese smart speaker/assistant device featuring:
+- ESP32-S3 with 16MB Flash and 8MB PSRAM
+- ES8311 audio codec (I2C controlled)
+- GC9A01A 240x240 round display
+- WS2812 RGB LED
+- Capacitive touch sensor
+- Built-in microphone and speaker
+
+You can find this device on AliExpress by searching for "Xiaozhi Ball V3" or "小智球 V3".
 
 ### Pin Configuration (Xiaozhi Ball V3)
+
 | Function | GPIO |
 |----------|------|
 | I2S LRCLK (WS) | GPIO45 |
@@ -48,14 +60,15 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 | Backlight | GPIO42 |
 | Status LED (WS2812) | GPIO48 |
 | Doorbell Button | GPIO0 |
+| Touch Sensor | GPIO12 |
 
-## 📦 Installation
+## Installation
 
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/n-IA-hane/esp32-intercom.git
-cd esp32-intercom
+git clone https://github.com/n-IA-hane/esphome-intercom.git
+cd esphome-intercom
 ```
 
 ### 2. Configure WiFi
@@ -87,68 +100,210 @@ pip install esphome
 esphome run intercom.yaml
 ```
 
-## 🏠 Home Assistant Setup
+## Home Assistant Setup
 
-### go2rtc Configuration
+This section covers setting up go2rtc and the WebRTC Camera card for different Home Assistant installation types.
 
-Add to your Home Assistant's `go2rtc.yaml`:
+### Step 1: Install go2rtc
+
+#### Option A: Home Assistant OS / Supervised (Add-on)
+
+1. Go to **Settings → Add-ons → Add-on Store**
+2. Search for **"go2rtc"** and install it
+3. The add-on configuration file is at `/addon_configs/go2rtc/go2rtc.yaml`
+4. After editing the config, restart the add-on
+
+#### Option B: Docker / Container / LXC
+
+If you run Home Assistant in a container, you need to run go2rtc separately:
+
+```bash
+# Download go2rtc binary
+wget https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64
+chmod +x go2rtc_linux_amd64
+mv go2rtc_linux_amd64 /usr/local/bin/go2rtc
+
+# Create config directory
+mkdir -p /etc/go2rtc
+
+# Create the config file (see below)
+nano /etc/go2rtc/go2rtc.yaml
+
+# Run go2rtc (or create a systemd service)
+go2rtc -config /etc/go2rtc/go2rtc.yaml
+```
+
+**Systemd service** (create `/etc/systemd/system/go2rtc.service`):
+```ini
+[Unit]
+Description=go2rtc
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/go2rtc -config /etc/go2rtc/go2rtc.yaml
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start:
+```bash
+systemctl enable go2rtc
+systemctl start go2rtc
+```
+
+#### Option C: Docker Compose
+
+```yaml
+version: "3"
+services:
+  go2rtc:
+    image: alexxit/go2rtc
+    container_name: go2rtc
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml
+```
+
+### Step 2: Configure go2rtc
+
+Create or edit your `go2rtc.yaml` with this configuration:
 
 ```yaml
 streams:
   intercom:
-    # Audio IN: ESP32 mic -> browser
+    # Audio IN: ESP32 microphone -> browser
     - "exec:ffmpeg -f s16le -ar 16000 -ac 1 -i udp://0.0.0.0:12345?timeout=5000000 -c:a libopus -b:a 48k -f mpegts -"
-    # Audio OUT: browser mic -> ESP32 (IMPORTANT: -re for real-time!)
+    # Audio OUT: browser microphone -> ESP32 speaker (CRITICAL: -re flag!)
     - "exec:ffmpeg -re -f alaw -ar 8000 -ac 1 -i pipe: -f s16le -ar 16000 -ac 1 udp://ESP32_IP:12346?pkt_size=512#backchannel=1"
 
 webrtc:
   candidates:
-    - YOUR_HA_IP:8555
+    - YOUR_HA_IP:8555      # Replace with your Home Assistant IP
     - stun:8555
 
 api:
-  listen: ":1984"
+  listen: ":1984"          # go2rtc web UI
 
 rtsp:
-  listen: ":8554"
+  listen: ":8554"          # RTSP server (optional)
 ```
 
-> ⚠️ **IMPORTANT**: The `-re` flag in the backchannel ffmpeg command is critical! Without it, ffmpeg sends packets at 1000x+ speed, causing audio loss.
+**IMPORTANT**: Replace `ESP32_IP` with your ESP32's IP address and `YOUR_HA_IP` with your Home Assistant's IP.
 
-### Lovelace Card
+> **CRITICAL**: The `-re` flag in the backchannel ffmpeg command is essential! Without it, ffmpeg sends packets at 1000x+ speed, causing audio loss.
 
-Add this card to your dashboard:
+### Step 3: Install WebRTC Camera Card
+
+The WebRTC Camera custom card is required to display the audio stream with bidirectional communication.
+
+#### Installation via HACS (Recommended)
+
+1. Make sure [HACS](https://hacs.xyz/) is installed
+2. Go to **HACS → Frontend**
+3. Click the **+ Explore & Download Repositories** button
+4. Search for **"WebRTC Camera"**
+5. Click **Download**
+6. Restart Home Assistant
+7. Clear your browser cache
+
+#### Manual Installation
+
+1. Download the latest release from [AlexxIT/WebRTC](https://github.com/AlexxIT/WebRTC/releases)
+2. Extract and copy `webrtc.js` to your `www` folder
+3. Add to your Lovelace resources:
+   ```yaml
+   resources:
+     - url: /local/webrtc.js
+       type: module
+   ```
+
+### Step 4: Configure the WebRTC Integration
+
+1. Go to **Settings → Devices & Services → Add Integration**
+2. Search for **"WebRTC Camera"**
+3. Configure the go2rtc URL:
+   - For add-on: `http://localhost:1984`
+   - For external: `http://YOUR_GO2RTC_IP:1984`
+
+### Step 5: Create the Dashboard
+
+Create a new dashboard or add this card to an existing one:
 
 ```yaml
-type: vertical-stack
-cards:
-  - type: button
-    entity: switch.intercom_streaming
-    show_name: true
-    show_icon: true
-    hold_action:
-      action: toggle
-  - type: entities
-    entities:
-      - entity: sensor.intercom_intercom_state
-  - type: conditional
-    conditions:
-      - condition: state
-        entity: switch.intercom_streaming
-        state: 'on'
-    card:
-      type: custom:webrtc-camera
-      url: intercom
-      mode: webrtc
-      media: audio+microphone
-      style: >-
-        width: 100%; aspect-ratio: 1/1; background: #1a1a1a;
-        border-radius: 50%;
+title: Intercom
+views:
+  - title: Intercom
+    path: intercom
+    icon: mdi:doorbell
+    cards:
+      - type: vertical-stack
+        cards:
+          - type: button
+            entity: switch.intercom_streaming
+            show_name: true
+            show_icon: true
+            hold_action:
+              action: toggle
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: switch.intercom_streaming
+                state: "on"
+            card:
+              type: custom:webrtc-camera
+              url: intercom
+              mode: webrtc
+              media: audio+microphone
+              style: >-
+                width: 100%; aspect-ratio: 1/1; background: #1a1a1a;
+                border-radius: 50%;
+          - type: entities
+            entities:
+              - entity: text_sensor.intercom_intercom_state
+              - entity: number.intercom_speaker_volume
+              - entity: select.intercom_hangup_mode
+              - entity: button.intercom_extend_call
+              - entity: sensor.intercom_wifi_signal
+              - entity: sensor.intercom_tx_packets
+              - entity: sensor.intercom_rx_packets
+              - entity: button.intercom_reset_counters
+      - type: logbook
+        title: Recent calls
+        target:
+          entity_id:
+            - binary_sensor.intercom_doorbell_button
+        hours_to_show: 24
 ```
 
-> **Note**: Requires the [WebRTC Camera](https://github.com/AlexxIT/WebRTC) custom component.
+## Display States
 
-## 🌐 Customizing State Translations
+The round display shows different colors and text based on the current state:
+
+| State | Background | Text Color | Description |
+|-------|------------|------------|-------------|
+| IDLE | Blue | Green | Ready, waiting for action |
+| RINGING | Orange | Blue (blinking) | Doorbell was pressed |
+| STREAMING | Green | Red | Active call with countdown |
+| ERROR | Red | White | Something went wrong |
+
+When streaming with "Automatic" hangup mode, a countdown timer is displayed (e.g., "Auto: 00:45").
+
+## Auto Hangup Feature
+
+The intercom includes an automatic hangup feature:
+
+- **Automatic mode**: Call disconnects after 60 seconds
+- **Manual mode**: Call stays connected until manually ended
+- **Touch to extend**: Touch the display during a call to reset the timer to 60 seconds
+- **Extend Call button**: Press in Home Assistant to add 60 more seconds
+
+Configure via `select.intercom_hangup_mode` in Home Assistant.
+
+## Customizing State Translations
 
 Edit the `STATE_TEXTS` map in `custom_components/udp_intercom/udp_intercom.h`:
 
@@ -163,15 +318,15 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 };
 ```
 
-## 📊 Architecture
+## Architecture
 
 ```
 ┌─────────────────┐     UDP:12345      ┌──────────────────┐
 │                 │ ──────────────────▶│                  │
-│    ESP32-S3     │     (Mic Audio)    │  Home Assistant  │
-│   + ES8311      │                    │    + go2rtc      │
-│   + Display     │ ◀──────────────────│    + ffmpeg      │
-│                 │     UDP:12346      │                  │
+│  Xiaozhi Ball   │     (Mic Audio)    │  Home Assistant  │
+│   ESP32-S3      │                    │    + go2rtc      │
+│   + ES8311      │ ◀──────────────────│    + ffmpeg      │
+│   + Display     │     UDP:12346      │                  │
 └─────────────────┘   (Speaker Audio)  └──────────────────┘
                                               │
                                               │ WebRTC
@@ -182,7 +337,7 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
                                        └──────────────┘
 ```
 
-## 🔧 Technical Details
+## Technical Details
 
 ### Audio Format
 - **Sample Rate**: 16000 Hz
@@ -206,17 +361,28 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 
 4. **Task Stack Size**: Audio buffers need stack space - 8KB minimum for the audio task.
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### No Audio from Speaker
 - Check that streaming is enabled (`switch.intercom_streaming`)
-- Verify go2rtc is running and configured correctly
+- Verify go2rtc is running: visit `http://YOUR_IP:1984`
 - Check the `-re` flag is present in the backchannel ffmpeg command
+- Ensure the ESP32 IP in go2rtc.yaml is correct
+
+### No Audio from Microphone
+- Check that the browser has microphone permission
+- Verify WebRTC connection in browser developer tools
+- Check go2rtc logs for ffmpeg errors
 
 ### Choppy/Glitchy Audio
 - The jitter buffer should handle this automatically
 - Check WiFi signal strength
 - Ensure ESP32 is not too far from the router
+
+### WebRTC Card Shows "Waiting for stream"
+- Verify go2rtc is running
+- Check WebRTC integration configuration
+- Ensure the stream name matches ("intercom")
 
 ### Device Keeps Rebooting
 - Check for stack overflow in logs
@@ -226,10 +392,10 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 - Lower the speaker volume using the volume slider
 - The microphone and speaker are close together on the device
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-esp32-intercom/
+esphome-intercom/
 ├── intercom.yaml              # Main ESPHome configuration
 ├── secrets.yaml               # WiFi credentials (create this)
 ├── README.md                  # This file
@@ -240,17 +406,36 @@ esp32-intercom/
         └── udp_intercom.cpp   # C++ implementation
 ```
 
-## 📜 License
+## Home Assistant Entities
+
+After flashing, the following entities will be available:
+
+| Entity | Type | Description |
+|--------|------|-------------|
+| `switch.intercom_streaming` | Switch | Start/stop audio streaming |
+| `select.intercom_hangup_mode` | Select | Automatic or Manual hangup |
+| `button.intercom_extend_call` | Button | Reset countdown to 60s |
+| `button.intercom_ring_doorbell` | Button | Trigger doorbell ring |
+| `number.intercom_speaker_volume` | Number | Speaker volume 0-100% |
+| `text_sensor.intercom_intercom_state` | Sensor | Current state text |
+| `binary_sensor.intercom_doorbell_button` | Binary | Physical button state |
+| `binary_sensor.intercom_display_touch` | Binary | Touch sensor state |
+| `binary_sensor.intercom_call_active` | Binary | Is call active |
+| `sensor.intercom_wifi_signal` | Sensor | WiFi signal strength |
+| `sensor.intercom_tx_packets` | Sensor | Transmitted packets |
+| `sensor.intercom_rx_packets` | Sensor | Received packets |
+
+## License
 
 MIT License - Feel free to use, modify, and distribute!
 
-## 🙏 Credits
+## Credits
 
 - **Created by**: Claude (Anthropic) for n-IA-hane
-- **Hardware**: Xiaozhi Ball V3
-- **Frameworks**: ESPHome, Home Assistant, go2rtc
+- **Hardware**: Xiaozhi Ball V3 (小智球 V3)
+- **Frameworks**: ESPHome, Home Assistant, go2rtc, WebRTC
 - **Inspiration**: The need for a simple, working intercom solution
 
 ---
 
-*If you find this project useful, give it a ⭐ on GitHub!*
+*If you find this project useful, give it a star on GitHub!*

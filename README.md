@@ -6,6 +6,7 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 ![ESPHome](https://img.shields.io/badge/ESPHome-2025.5+-green)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Compatible-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
+![Version](https://img.shields.io/badge/Version-1.0-brightgreen)
 
 ## The Story Behind This Project
 
@@ -391,6 +392,16 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 ### Echo/Feedback
 - Lower the speaker volume using the volume slider
 - The microphone and speaker are close together on the device
+
+### Audio Starts Muted / No Sound
+Modern browsers block audio autoplay by default. You need to allow audio for your Home Assistant domain:
+
+- **Chrome/Edge**: Click the lock icon in the URL bar → Site settings → Sound → Allow
+- **Firefox**: Go to `about:config` and set `media.autoplay.default` to `0`
+- **Safari/iOS**: Settings → Safari → Auto-Play → Allow All Auto-Play
+- **Home Assistant Android App**: App settings → Advanced → Allow audio autoplay
+
+This is a browser security feature, not a bug. Once allowed, audio will always start unmuted.
 
 ## Project Structure
 

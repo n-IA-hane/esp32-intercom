@@ -26,10 +26,20 @@ esphome:
       - delay: 3s
       - lambda: id(boot_complete) = true;
       - lambda: |-
-          // Apply saved volume on boot
-          float vol = id(speaker_volume).state / 100.0;
+          // Apply saved volume on boot (same curve as set_action)
+          float x = id(speaker_volume).state;
+          float vol;
+          if (x <= 0) {
+            vol = 0.0;
+          } else {
+            vol = 0.15 + (x / 100.0) * 0.60;
+          }
           id(es8311_dac).set_volume(vol);
-          ESP_LOGI("boot", "Applied saved volume: %.0f%%", id(speaker_volume).state);
+          ESP_LOGI("boot", "Applied saved volume: %.0f%% -> DAC %.2f", x, vol);
+
+          // Apply saved AEC state
+          id(intercom_component).set_aec_enabled(id(aec_switch).state);
+          ESP_LOGI("boot", "AEC state: %s", id(aec_switch).state ? "ON" : "OFF");
       - component.update: main_display
 
 esp32:
@@ -41,6 +51,9 @@ esp32:
       CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+    # ESP-SR for Acoustic Echo Cancellation (AFE)
+    components:
+      - espressif/esp-sr^2.3.0
 
 psram:
   mode: octal
@@ -231,6 +244,21 @@ switch:
           id: intercom_component
     lambda: return id(intercom_component).is_streaming();
 
+  - platform: template
+    name: "Echo Cancellation"
+    id: aec_switch
+    icon: "mdi:microphone-off"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - lambda: |-
+          id(intercom_component).set_aec_enabled(true);
+          ESP_LOGI("aec", "Echo Cancellation ENABLED (restart streaming to apply)");
+    turn_off_action:
+      - lambda: |-
+          id(intercom_component).set_aec_enabled(false);
+          ESP_LOGI("aec", "Echo Cancellation DISABLED (restart streaming to apply)");
+
 # =============================================================================
 # SELECT FOR HANGUP MODE
 # =============================================================================
@@ -280,16 +308,23 @@ number:
     min_value: 0
     max_value: 100
     step: 5
-    initial_value: 60
+    initial_value: 50
     optimistic: true
     restore_value: true
     unit_of_measurement: "%"
     icon: "mdi:volume-high"
     set_action:
       - lambda: |-
-          float vol = x / 100.0;  // Convert 0-100 to 0.0-1.0
+          // Map 0-100% to usable DAC range (0.15 - 0.75)
+          // 0% -> 0 (mute), 1-100% -> 0.15-0.75
+          float vol;
+          if (x <= 0) {
+            vol = 0.0;  // True mute
+          } else {
+            vol = 0.15 + (x / 100.0) * 0.60;
+          }
           id(es8311_dac).set_volume(vol);
-          ESP_LOGI("volume", "Speaker volume set to %.0f%% (%.2f)", x, vol);
+          ESP_LOGI("volume", "Speaker volume: %.0f%% -> DAC %.2f", x, vol);
 
 # =============================================================================
 # BUTTONS

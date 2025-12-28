@@ -17,6 +17,10 @@
 #include <errno.h>
 #include <driver/gpio.h>
 
+// ESP-AFE for AEC (official Espressif solution)
+#include "esp_aec.h"
+#include "esp_heap_caps.h"
+
 namespace esphome {
 namespace udp_intercom {
 
@@ -227,9 +231,10 @@ bool UDPIntercom::init_sockets_() {
     return false;
   }
 
-  // Allow address reuse
+  // Allow address reuse (important for quick restart)
   int reuse = 1;
   setsockopt(this->recv_socket_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  setsockopt(this->recv_socket_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
 
   // Bind receive socket to listen port
   struct sockaddr_in listen_addr;
@@ -239,13 +244,15 @@ bool UDPIntercom::init_sockets_() {
   listen_addr.sin_port = htons(this->listen_port_);
 
   if (bind(this->recv_socket_, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0) {
-    ESP_LOGE(TAG, "Failed to bind receive socket to port %d: %d", this->listen_port_, errno);
+    ESP_LOGE(TAG, "Failed to bind receive socket to port %d: errno=%d (%s)",
+             this->listen_port_, errno, strerror(errno));
     close(this->send_socket_);
     close(this->recv_socket_);
     this->send_socket_ = -1;
     this->recv_socket_ = -1;
     return false;
   }
+  ESP_LOGI(TAG, "Receive socket bound to port %d", this->listen_port_);
 
   // Set receive socket to non-blocking
   flags = fcntl(this->recv_socket_, F_GETFL, 0);
@@ -268,6 +275,8 @@ void UDPIntercom::close_sockets_() {
     close(this->recv_socket_);
     this->recv_socket_ = -1;
   }
+  // Small delay to let OS fully release the port
+  vTaskDelay(pdMS_TO_TICKS(50));
   ESP_LOGI(TAG, "UDP sockets closed");
 }
 
@@ -315,13 +324,39 @@ static size_t jitter_read(uint8_t *data, size_t len) {
 // =============================================================================
 // Audio Processing Task
 // This runs in a separate FreeRTOS task for real-time audio handling
+// Now includes AEC (Acoustic Echo Cancellation)
 // =============================================================================
 void UDPIntercom::audio_task(void *params) {
   UDPIntercom *intercom = (UDPIntercom *)params;
 
-  uint8_t mic_buffer[AUDIO_BUFFER_SIZE];
+  // Get AEC frame size from ESP-AFE, or use default 256 if AEC disabled
+  bool aec_enabled = (intercom->aec_handle_ != nullptr);
+  int frame_size = aec_enabled ? intercom->aec_frame_size_ : 256;
+  if (frame_size <= 0) frame_size = 256;  // Fallback
+  size_t frame_bytes = frame_size * sizeof(int16_t);
+
+  ESP_LOGI(TAG, "Audio task: AEC=%s, frame_size=%d samples (%d bytes)",
+           aec_enabled ? "ON" : "OFF", frame_size, (int)frame_bytes);
+
+  // Allocate aligned buffers for ESP-AFE (requires aligned memory)
+  int16_t *mic_buffer = (int16_t *)heap_caps_aligned_alloc(16, frame_bytes, MALLOC_CAP_INTERNAL);
+  int16_t *aec_output = (int16_t *)heap_caps_aligned_alloc(16, frame_bytes, MALLOC_CAP_INTERNAL);
+  int16_t *last_speaker_frame = (int16_t *)heap_caps_aligned_alloc(16, frame_bytes, MALLOC_CAP_INTERNAL);
+  int16_t *spk_buffer = (int16_t *)heap_caps_aligned_alloc(16, frame_bytes, MALLOC_CAP_INTERNAL);
+
+  if (!mic_buffer || !aec_output || !last_speaker_frame || !spk_buffer) {
+    ESP_LOGE(TAG, "Failed to allocate audio buffers");
+    if (mic_buffer) heap_caps_free(mic_buffer);
+    if (aec_output) heap_caps_free(aec_output);
+    if (last_speaker_frame) heap_caps_free(last_speaker_frame);
+    if (spk_buffer) heap_caps_free(spk_buffer);
+    vTaskDelete(NULL);
+    return;
+  }
+  memset(last_speaker_frame, 0, frame_bytes);
+  memset(spk_buffer, 0, frame_bytes);
+
   uint8_t udp_buffer[AUDIO_BUFFER_SIZE];
-  uint8_t spk_buffer[AUDIO_BUFFER_SIZE];
   size_t bytes_read, bytes_written;
 
   // Reset jitter buffer
@@ -330,40 +365,17 @@ void UDPIntercom::audio_task(void *params) {
   jitter_available = 0;
 
   // Pre-buffer threshold: wait until we have some audio before playing
-  // This helps prevent choppy audio at the start
-  const size_t PREBUFFER_THRESHOLD = 2048;  // 64ms of audio
+  const size_t PREBUFFER_THRESHOLD = 2048;  // 64ms of audio (original value)
   bool prebuffering = true;
 
   ESP_LOGI(TAG, "Audio task started - Full Duplex with jitter buffer");
 
   while (intercom->streaming_active_) {
-    // === MICROPHONE -> UDP (TX) ===
-    // Read from I2S mic - this naturally paces the loop
-    esp_err_t err = i2s_channel_read(intercom->rx_handle_, mic_buffer, AUDIO_BUFFER_SIZE,
-                                      &bytes_read, pdMS_TO_TICKS(50));
-    if (err == ESP_OK && bytes_read > 0) {
-      ssize_t sent = sendto(
-        intercom->send_socket_,
-        mic_buffer,
-        bytes_read,
-        0,
-        (struct sockaddr *)&intercom->server_addr_,
-        sizeof(intercom->server_addr_)
-      );
-
-      if (sent > 0) {
-        intercom->tx_packets_++;
-      } else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        ESP_LOGW(TAG, "UDP send error: %d", errno);
-      }
-    }
-
-    // === UDP -> JITTER BUFFER ===
-    // Read all available UDP packets into jitter buffer
+    // === UDP -> JITTER BUFFER (receive audio from network) ===
     struct sockaddr_in src_addr;
     socklen_t addr_len = sizeof(src_addr);
 
-    for (int i = 0; i < 10; i++) {  // Process up to 10 packets per iteration
+    for (int i = 0; i < 10; i++) {
       ssize_t received = recvfrom(
         intercom->recv_socket_,
         udp_buffer,
@@ -377,37 +389,77 @@ void UDPIntercom::audio_task(void *params) {
         intercom->rx_packets_++;
         jitter_write(udp_buffer, received);
       } else {
-        break;  // No more packets available
+        break;
       }
     }
 
     // === JITTER BUFFER -> SPEAKER ===
+    memset(spk_buffer, 0, frame_bytes);  // Default to silence
+
     if (prebuffering) {
-      // Wait until we have enough audio buffered
       if (jitter_available >= PREBUFFER_THRESHOLD) {
         prebuffering = false;
         ESP_LOGI(TAG, "Prebuffer complete, starting playback (%d bytes)", jitter_available);
       }
-    } else {
-      // Play audio from jitter buffer
-      size_t to_play = (jitter_available > AUDIO_BUFFER_SIZE) ? AUDIO_BUFFER_SIZE : jitter_available;
+    }
 
-      if (to_play > 0) {
-        size_t got = jitter_read(spk_buffer, to_play);
-        if (got > 0) {
-          err = i2s_channel_write(intercom->tx_handle_, spk_buffer, got,
-                                  &bytes_written, pdMS_TO_TICKS(50));
-          if (err != ESP_OK) {
-            ESP_LOGD(TAG, "I2S write error: %s", esp_err_to_name(err));
-          }
+    if (!prebuffering && jitter_available >= frame_bytes) {
+      size_t got = jitter_read((uint8_t*)spk_buffer, frame_bytes);
+      if (got == frame_bytes) {
+        // Play to speaker
+        esp_err_t err = i2s_channel_write(intercom->tx_handle_, spk_buffer, frame_bytes,
+                                          &bytes_written, pdMS_TO_TICKS(50));
+        if (err != ESP_OK) {
+          ESP_LOGD(TAG, "I2S write error: %s", esp_err_to_name(err));
         }
+        // Save for AEC reference
+        memcpy(last_speaker_frame, spk_buffer, frame_bytes);
+      }
+    } else if (!prebuffering && jitter_available == 0) {
+      prebuffering = true;
+      ESP_LOGW(TAG, "Buffer underrun, rebuffering...");
+    }
+
+    // === MICROPHONE -> AEC -> UDP (transmit audio to network) ===
+    esp_err_t err = i2s_channel_read(intercom->rx_handle_, mic_buffer, frame_bytes,
+                                      &bytes_read, pdMS_TO_TICKS(50));
+    if (err == ESP_OK && bytes_read == frame_bytes) {
+      int16_t *send_buffer;
+
+      if (aec_enabled) {
+        // Apply ESP-AFE AEC: remove echo of speaker from mic
+        aec_process(intercom->aec_handle_,
+                    mic_buffer,          // Mic input (with echo)
+                    last_speaker_frame,  // What we played (reference)
+                    aec_output);         // Cleaned output
+        send_buffer = aec_output;
       } else {
-        // Buffer underrun - go back to prebuffering
-        prebuffering = true;
-        ESP_LOGW(TAG, "Buffer underrun, rebuffering...");
+        send_buffer = mic_buffer;
+      }
+
+      // Send to UDP
+      ssize_t sent = sendto(
+        intercom->send_socket_,
+        send_buffer,
+        frame_bytes,
+        0,
+        (struct sockaddr *)&intercom->server_addr_,
+        sizeof(intercom->server_addr_)
+      );
+
+      if (sent > 0) {
+        intercom->tx_packets_++;
+      } else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        ESP_LOGW(TAG, "UDP send error: %d", errno);
       }
     }
   }
+
+  // Free aligned buffers
+  heap_caps_free(mic_buffer);
+  heap_caps_free(aec_output);
+  heap_caps_free(last_speaker_frame);
+  heap_caps_free(spk_buffer);
 
   ESP_LOGI(TAG, "Audio task stopped");
   vTaskDelete(NULL);
@@ -437,13 +489,38 @@ void UDPIntercom::start_streaming() {
     return;
   }
 
+  // Initialize AEC (Acoustic Echo Cancellation) - ESP-AFE
+  // Only if enabled via switch
+  if (this->aec_enabled_) {
+    // API: aec_create(sample_rate, filter_length, channel_num, mode)
+    // - sample_rate: must be 16000 Hz
+    // - filter_length: recommend 4 (larger = more echo tail, more resources)
+    // - channel_num: 1 for mono microphone
+    // - mode: AEC_MODE_VOIP_HIGH_PERF for voice communication
+    this->aec_handle_ = aec_create(this->sample_rate_, 4, 1, AEC_MODE_VOIP_HIGH_PERF);
+
+    if (this->aec_handle_) {
+      // Get frame size from the AEC instance (32ms @ 16kHz = 512 samples)
+      this->aec_frame_size_ = aec_get_chunksize(this->aec_handle_);
+      ESP_LOGI(TAG, "ESP-AFE AEC initialized: %d Hz, %d samples/frame, VOIP_HIGH_PERF mode",
+               this->sample_rate_, this->aec_frame_size_);
+    } else {
+      ESP_LOGW(TAG, "Failed to create AEC, continuing without echo cancellation");
+      this->aec_frame_size_ = 0;
+    }
+  } else {
+    ESP_LOGI(TAG, "AEC disabled by user");
+    this->aec_handle_ = nullptr;
+    this->aec_frame_size_ = 0;
+  }
+
   this->streaming_active_ = true;
 
-  // Create audio processing task with larger stack for buffers
+  // Create audio processing task with larger stack for buffers + AEC
   BaseType_t result = xTaskCreatePinnedToCore(
     audio_task,
     "udp_audio",
-    8192,  // Stack size - needs to be large enough for audio buffers
+    16384,  // Stack size - larger for AEC processing
     this,
     10,    // Priority
     &this->audio_task_handle_,
@@ -474,10 +551,25 @@ void UDPIntercom::stop_streaming() {
 
   this->streaming_active_ = false;
 
-  // Wait for audio task to finish
+  // Wait for audio task to actually finish (up to 500ms)
   if (this->audio_task_handle_ != nullptr) {
-    vTaskDelay(pdMS_TO_TICKS(100));  // Give task time to exit
+    int wait_count = 0;
+    while (eTaskGetState(this->audio_task_handle_) != eDeleted && wait_count < 50) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      wait_count++;
+    }
+    if (wait_count >= 50) {
+      ESP_LOGW(TAG, "Audio task did not exit cleanly, forcing cleanup");
+    }
     this->audio_task_handle_ = nullptr;
+  }
+
+  // Cleanup ESP-AFE AEC
+  if (this->aec_handle_) {
+    aec_destroy(this->aec_handle_);
+    this->aec_handle_ = nullptr;
+    this->aec_frame_size_ = 0;
+    ESP_LOGI(TAG, "ESP-AFE AEC destroyed");
   }
 
   // Cleanup

@@ -57,6 +57,8 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
+    # ESP-AFE AEC is provided by esp-sr component (added in yaml framework.components)
+
     cg.add(var.set_server_ip(config[CONF_SERVER_IP]))
     cg.add(var.set_server_port(config[CONF_SERVER_PORT]))
     cg.add(var.set_listen_port(config[CONF_LISTEN_PORT]))

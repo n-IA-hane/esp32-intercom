@@ -21,6 +21,9 @@
 #include <map>
 #include <string>
 
+// ESP-AFE for Acoustic Echo Cancellation (official Espressif solution)
+#include "esp_aec.h"
+
 namespace esphome {
 namespace udp_intercom {
 
@@ -82,6 +85,10 @@ class UDPIntercom : public Component {
   void set_listen_port(uint16_t port) { this->listen_port_ = port; }
   void set_sample_rate(uint32_t rate) { this->sample_rate_ = rate; }
 
+  // AEC (Echo Cancellation) control
+  void set_aec_enabled(bool enabled) { this->aec_enabled_ = enabled; }
+  bool get_aec_enabled() const { return this->aec_enabled_; }
+
   // Actions
   void start_streaming();
   void stop_streaming();
@@ -140,6 +147,11 @@ class UDPIntercom : public Component {
 
   // Audio task handle
   TaskHandle_t audio_task_handle_{nullptr};
+
+  // AEC (Acoustic Echo Cancellation) - ESP-AFE
+  bool aec_enabled_{true};  // Can be toggled via switch before streaming
+  aec_handle_t *aec_handle_{nullptr};
+  int aec_frame_size_{0};  // Set by aec_get_chunksize()
 
   // Debug counters
   uint32_t tx_packets_{0};

@@ -6,7 +6,23 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 ![ESPHome](https://img.shields.io/badge/ESPHome-2025.5+-green)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Compatible-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-1.0-brightgreen)
+![Version](https://img.shields.io/badge/Version-2.0-brightgreen)
+
+---
+
+## Preview
+
+<p align="center">
+  <img src="readme_img/idle.jpg" width="180" alt="IDLE state"/>
+  <img src="readme_img/ringing.jpg" width="180" alt="RINGING state"/>
+  <img src="readme_img/streaming.jpg" width="180" alt="STREAMING state"/>
+</p>
+
+<p align="center">
+  <img src="readme_img/Dashboard.png" width="400" alt="Home Assistant Dashboard"/>
+</p>
+
+---
 
 ## The Story Behind This Project
 
@@ -23,10 +39,11 @@ https://github.com/n-IA-hane/esphome-intercom/raw/master/readme_img/call.mp4
 ## Features
 
 - **Full Duplex Audio**: Simultaneous microphone and speaker operation
+- **Echo Cancellation (AEC)**: ESP-AFE powered acoustic echo cancellation with ON/OFF switch
 - **WebRTC Support**: Stream audio to any browser via go2rtc
 - **Home Assistant Integration**: Full control from HA dashboards
 - **Round Display**: Visual feedback on GC9A01A 240x240 display with colored states
-- **Volume Control**: Adjustable speaker volume via ES8311 DAC
+- **Volume Control**: Adjustable speaker volume via ES8311 DAC with optimized curve
 - **Doorbell Function**: Ring notification with LED feedback
 - **Auto Hangup**: Configurable 60-second countdown with auto-disconnect
 - **Touch to Extend**: Touch the display to reset the countdown timer
@@ -262,57 +279,57 @@ The WebRTC Camera custom card is required to display the audio stream with bidir
 
 ### Step 5: Create the Dashboard
 
-<p align="center">
-  <img src="readme_img/dashboard.jpg" width="400" alt="Home Assistant Dashboard"/>
-</p>
-
 Create a new dashboard or add this card to an existing one:
 
 ```yaml
-title: Intercom
+title: Citofono
 views:
-  - title: Intercom
+  - title: Citofono
     path: intercom
     icon: mdi:doorbell
     cards:
       - type: vertical-stack
         cards:
-          - type: button
-            entity: switch.intercom_streaming
-            show_name: true
+          - show_name: true
             show_icon: true
+            type: button
+            entity: switch.intercom_streaming
             hold_action:
               action: toggle
           - type: conditional
             conditions:
               - condition: state
                 entity: switch.intercom_streaming
-                state: "on"
+                state: 'on'
             card:
               type: custom:webrtc-camera
               url: intercom
               mode: webrtc
               media: audio+microphone
+              muted: false
               style: >-
                 width: 100%; aspect-ratio: 1/1; background: #1a1a1a;
                 border-radius: 50%;
           - type: entities
             entities:
-              - entity: text_sensor.intercom_intercom_state
-              - entity: number.intercom_speaker_volume
+              - entity: sensor.citofono_porta_intercom_state
+              - entity: number.citofono_porta_speaker_volume
+              - entity: switch.intercom_echo_cancellation
               - entity: select.intercom_hangup_mode
               - entity: button.intercom_extend_call
-              - entity: sensor.intercom_wifi_signal
-              - entity: sensor.intercom_tx_packets
-              - entity: sensor.intercom_rx_packets
-              - entity: button.intercom_reset_counters
+              - entity: sensor.citofono_porta_wifi_signal
+              - entity: sensor.citofono_porta_tx_packets
+              - entity: sensor.citofono_porta_rx_packets
+              - entity: button.citofono_porta_reset_counters
       - type: logbook
-        title: Recent calls
+        title: Ultima chiamata
         target:
           entity_id:
-            - binary_sensor.intercom_doorbell_button
-        hours_to_show: 24
+            - binary_sensor.citofono_porta_doorbell_button
+        hours_to_show: 1
 ```
+
+> **Note**: Entity names may vary based on your device name in ESPHome. Adjust accordingly.
 
 ### Step 6: Doorbell Notification (Optional)
 
@@ -358,13 +375,17 @@ The round display shows different colors and text based on the current state:
 | STREAMING | Green | Red | Active call with countdown |
 | ERROR | Red | White | Something went wrong |
 
-<p align="center">
-  <img src="readme_img/idle.jpg" width="200" alt="IDLE state"/>
-  <img src="readme_img/ringing.jpg" width="200" alt="RINGING state"/>
-  <img src="readme_img/streaming.jpg" width="200" alt="STREAMING state"/>
-</p>
-
 When streaming with "Automatic" hangup mode, a countdown timer is displayed (e.g., "Auto: 00:45").
+
+## Echo Cancellation (AEC)
+
+Version 2.0 includes **ESP-AFE Acoustic Echo Cancellation** powered by Espressif's official audio front-end library.
+
+- **Toggle via Home Assistant**: Use the "Echo Cancellation" switch to enable/disable
+- **Restart required**: Stop and restart streaming to apply changes
+- **Resource usage**: ~22% CPU when enabled
+
+The AEC significantly reduces echo during full-duplex calls, making conversations much more natural.
 
 ## Auto Hangup Feature
 
@@ -400,7 +421,7 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 │  Xiaozhi Ball   │     (Mic Audio)    │  Home Assistant  │
 │   ESP32-S3      │                    │    + go2rtc      │
 │   + ES8311      │ ◀──────────────────│    + ffmpeg      │
-│   + Display     │     UDP:12346      │                  │
+│   + ESP-AFE AEC │     UDP:12346      │                  │
 └─────────────────┘   (Speaker Audio)  └──────────────────┘
                                               │
                                               │ WebRTC
@@ -424,6 +445,7 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 - **Jitter Buffer**: 8KB (256ms)
 - **Pre-buffer Threshold**: 2KB (64ms)
 - **Audio Chunk Size**: 1024 bytes
+- **AEC Frame Size**: 512 samples (32ms)
 
 ### Key Lessons Learned
 
@@ -433,7 +455,9 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 
 3. **Jitter Buffer**: Essential for smooth audio - UDP packets can arrive with variable timing.
 
-4. **Task Stack Size**: Audio buffers need stack space - 8KB minimum for the audio task.
+4. **Task Stack Size**: Audio buffers need stack space - 16KB for the audio task with AEC.
+
+5. **ESP-AFE AEC**: Use `aec_create()` with proper parameters and `aec_get_chunksize()` for frame size.
 
 ## Troubleshooting
 
@@ -463,8 +487,8 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
 - Increase task stack size if needed
 
 ### Echo/Feedback
-- Lower the speaker volume using the volume slider
-- The microphone and speaker are close together on the device
+- Enable the "Echo Cancellation" switch
+- If still present, lower the speaker volume
 
 ### Audio Starts Muted / No Sound
 Modern browsers block audio autoplay by default. You need to allow audio for your Home Assistant domain:
@@ -497,6 +521,7 @@ After flashing, the following entities will be available:
 | Entity | Type | Description |
 |--------|------|-------------|
 | `switch.intercom_streaming` | Switch | Start/stop audio streaming |
+| `switch.intercom_echo_cancellation` | Switch | Enable/disable AEC |
 | `select.intercom_hangup_mode` | Select | Automatic or Manual hangup |
 | `button.intercom_extend_call` | Button | Reset countdown to 60s |
 | `button.intercom_ring_doorbell` | Button | Trigger doorbell ring |
@@ -511,8 +536,21 @@ After flashing, the following entities will be available:
 
 ## Roadmap / TODO
 
-- [ ] **Echo Cancellation**: Experiment with ESP-IDF's AEC (Acoustic Echo Cancellation). Initial tests caused audio glitches - needs more investigation
+- [ ] **Improve AEC**: Fine-tune echo cancellation parameters for even better performance
 - [ ] **Video Intercom**: Add camera support using ESP32-S3-CAM module. Goal is full video + two-way audio streaming via WebRTC
+
+## Changelog
+
+### Version 2.0
+- **NEW**: Echo Cancellation (ESP-AFE AEC) with toggle switch
+- **NEW**: Improved volume curve (usable across full range)
+- **IMPROVED**: Streaming restart stability
+- **IMPROVED**: Socket handling with proper cleanup
+
+### Version 1.0
+- Initial release with full-duplex audio
+- Jitter buffer for smooth playback
+- WebRTC integration via go2rtc
 
 ## License
 
@@ -522,7 +560,7 @@ MIT License - Feel free to use, modify, and distribute!
 
 - **Created by**: Claude (Anthropic) for n-IA-hane
 - **Hardware**: Xiaozhi Ball V3 (小智球 V3)
-- **Frameworks**: ESPHome, Home Assistant, go2rtc, WebRTC
+- **Frameworks**: ESPHome, Home Assistant, go2rtc, WebRTC, ESP-AFE
 - **Inspiration**: The need for a simple, working intercom solution
 
 ---

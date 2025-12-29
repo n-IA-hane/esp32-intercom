@@ -372,9 +372,23 @@ switch:
     id: streaming_switch
     icon: "mdi:phone"
     turn_on_action:
-      - lambda: id(countdown_seconds) = 60;  # Reset countdown
-      - udp_intercom.start_streaming:
-          id: intercom_component
+      - lambda: |-
+          id(countdown_seconds) = 60;  // Reset countdown
+          auto mode = id(intercom_component).get_operating_mode();
+          if (mode == udp_intercom::OPERATING_MODE_P2P) {
+            // P2P mode: use target IP from text input
+            std::string target = id(manual_peer_ip).state;
+            if (target.empty()) {
+              ESP_LOGW("streaming", "P2P mode but no target IP set!");
+              return;
+            }
+            ESP_LOGI("streaming", "Starting P2P streaming to %s", target.c_str());
+            id(intercom_component).start_streaming_to_peer(target);
+          } else {
+            // go2rtc mode
+            ESP_LOGI("streaming", "Starting go2rtc streaming");
+            id(intercom_component).start_streaming();
+          }
     turn_off_action:
       - udp_intercom.stop_streaming:
           id: intercom_component
@@ -562,6 +576,9 @@ button:
           call.perform();
           ESP_LOGI("peer", "Selected peer %d/%d: %s (%s)",
                    next_idx + 1, peers.size(), next_peer.name.c_str(), next_peer.ip.c_str());
+
+  - platform: restart
+    name: "Restart"
 
 # =============================================================================
 # OUTPUT & LIGHTS

@@ -1,12 +1,12 @@
 # ESPHome UDP Intercom for Home Assistant
 
-A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assistant. Stream bidirectional audio over UDP with WebRTC support via go2rtc.
+A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assistant. Stream bidirectional audio over UDP with WebRTC support via go2rtc, or use **P2P mode** for direct device-to-device communication!
 
 ![ESP32 Intercom](https://img.shields.io/badge/ESP32--S3-Intercom-blue)
 ![ESPHome](https://img.shields.io/badge/ESPHome-2025.5+-green)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Compatible-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-2.0-brightgreen)
+![Version](https://img.shields.io/badge/Version-3.0-brightgreen)
 
 ---
 
@@ -38,31 +38,73 @@ https://github.com/n-IA-hane/esphome-intercom/raw/master/readme_img/call.mp4
 
 ## Features
 
+### Core Features
 - **Full Duplex Audio**: Simultaneous microphone and speaker operation
 - **Echo Cancellation (AEC)**: ESP-AFE powered acoustic echo cancellation with ON/OFF switch
 - **WebRTC Support**: Stream audio to any browser via go2rtc
 - **Home Assistant Integration**: Full control from HA dashboards
-- **Round Display**: Visual feedback on GC9A01A 240x240 display with colored states
-- **Volume Control**: Adjustable speaker volume via ES8311 DAC with optimized curve
-- **Doorbell Function**: Ring notification with LED feedback
-- **Auto Hangup**: Configurable 60-second countdown with auto-disconnect
-- **Touch to Extend**: Touch the display to reset the countdown timer
+- **Volume Control**: Adjustable speaker volume (hardware or software)
 - **Jitter Buffer**: Smooth audio playback without glitches
-- **Customizable States**: Translate status messages to any language
 
-## Hardware Requirements
+### P2P Mode (NEW in v3.0!)
+- **Direct Device-to-Device**: No server required - ESP devices talk directly to each other
+- **mDNS Discovery**: Automatic peer discovery on local network
+- **Auto-Answer**: Hands-free operation for secondary units
+- **Multi-Device Support**: Connect multiple intercom units together
 
-### Tested Hardware
+<p align="center">
+  <img src="readme_img/Dashboard_p2p.jpg" width="500" alt="P2P Mode Dashboard"/>
+</p>
 
-This project was developed and tested on the **Xiaozhi Ball V3** (小智球 V3), a Chinese smart speaker/assistant device featuring:
+### Device-Specific Features
+
+| Feature | Xiaozhi Ball V3 | ESP32-S3 Mini |
+|---------|-----------------|---------------|
+| Round Display | Yes (GC9A01A 240x240) | No |
+| Doorbell Button | Yes | No |
+| Touch Sensor | Yes | No |
+| Auto Hangup | Yes (with countdown) | No |
+| Status LED | WS2812 RGB | WS2812 RGB |
+| Volume Control | Hardware (ES8311) | Software |
+
+## Supported Hardware
+
+### 1. Xiaozhi Ball V3 (小智球 V3) - Primary Unit
+
+This project was developed and tested on the **Xiaozhi Ball V3**, a Chinese smart speaker featuring:
 - ESP32-S3 with 16MB Flash and 8MB PSRAM
-- ES8311 audio codec (I2C controlled)
+- ES8311 audio codec (I2C controlled, single I2S bus)
 - GC9A01A 240x240 round display
-- WS2812 RGB LED
-- Capacitive touch sensor
+- WS2812 RGB LED, capacitive touch sensor
 - Built-in microphone and speaker
 
 You can find this device on AliExpress by searching for "Xiaozhi Ball V3" or "小智球 V3".
+
+**Configuration file**: `intercom.yaml`
+
+### 2. ESP32-S3 Mini + INMP441 + MAX98357A - Secondary Unit (NEW in v3.0!)
+
+A minimal intercom unit using common breakout boards:
+- ESP32-S3 Mini development board
+- INMP441 I2S MEMS microphone
+- MAX98357A I2S amplifier with speaker
+- WS2812 status LED (optional)
+
+**Configuration file**: `intercom_mini.yaml`
+
+#### Wiring for ESP32-S3 Mini
+
+| Component | Pin | GPIO |
+|-----------|-----|------|
+| **INMP441 Mic** | WS (LRCLK) | GPIO3 |
+| | SCK (BCLK) | GPIO2 |
+| | SD (DOUT) | GPIO4 |
+| | L/R | GND (left channel) |
+| **MAX98357A Amp** | LRC (LRCLK) | GPIO6 |
+| | BCLK | GPIO7 |
+| | DIN | GPIO8 |
+| | GAIN | Not connected (9dB default) |
+| **Status LED** | DIN | GPIO21 |
 
 ### Pin Configuration (Xiaozhi Ball V3)
 
@@ -106,8 +148,8 @@ wifi_password: "YourWiFiPassword"
 
 ### 3. Update Configuration
 
-Edit `intercom.yaml` and update:
-- `server_ip`: Your Home Assistant IP address
+Edit the YAML file for your device and update:
+- `server_ip`: Your Home Assistant IP address (for go2rtc mode)
 - `use_address`: (Optional) Static IP for the ESP32
 
 ### 4. Flash the Firmware
@@ -116,7 +158,7 @@ Edit `intercom.yaml` and update:
 
 1. Open the **ESPHome Dashboard** add-on in Home Assistant
 2. Click **+ New Device** → **Continue** → **Skip this step**
-3. Copy the contents of `intercom.yaml` and the `custom_components` folder to your ESPHome config directory
+3. Copy the contents of your YAML file and the `custom_components` folder to your ESPHome config directory
 4. Edit the device and click **Install**
 
 #### Option B: Using ESPHome CLI (Standalone)
@@ -129,244 +171,149 @@ source venv/bin/activate
 # Install ESPHome
 pip install esphome
 
-# Compile and upload
+# Compile and upload (Xiaozhi Ball V3)
 esphome run intercom.yaml
+
+# Or for ESP32-S3 Mini
+esphome run intercom_mini.yaml
 ```
+
+## Operating Modes
+
+### go2rtc Mode (Default for Xiaozhi)
+
+Stream audio to web browsers via WebRTC. Requires go2rtc server on Home Assistant.
+
+**Use case**: Answer the door from your phone or computer anywhere in the house.
+
+### P2P Mode (Default for ESP Mini)
+
+Direct device-to-device communication. No server required!
+
+**Use case**: Walkie-talkie style communication between rooms, baby monitor, office intercom.
+
+#### P2P Mode Options:
+- **P2P**: Manual answer required on receiving device
+- **P2P Auto Answer**: Automatically starts streaming when called (hands-free)
 
 ## Home Assistant Setup
 
-This section covers setting up go2rtc and the WebRTC Camera card for different Home Assistant installation types.
+### For go2rtc Mode
 
-### Step 1: Install go2rtc
+#### Step 1: Install go2rtc
 
-#### Option A: Home Assistant OS / Supervised (Built-in since 2024.11)
+**Home Assistant OS / Supervised (Built-in since 2024.11)**:
 
-Since Home Assistant 2024.11, **go2rtc is built-in** - no add-on needed! FFmpeg with all codecs (opus, alaw, etc.) is included.
+Since Home Assistant 2024.11, **go2rtc is built-in** - no add-on needed!
 
 Add this to your `configuration.yaml`:
 
 ```yaml
 go2rtc:
   streams:
+    # Xiaozhi Ball V3 (Citofono Porta)
     intercom:
-      # Audio IN: ESP32 microphone -> browser
       - "exec:ffmpeg -f s16le -ar 16000 -ac 1 -i udp://0.0.0.0:12345?timeout=5000000 -c:a libopus -b:a 48k -f mpegts -"
-      # Audio OUT: browser microphone -> ESP32 speaker (CRITICAL: -re flag!)
-      - "exec:ffmpeg -re -f alaw -ar 8000 -ac 1 -i pipe: -f s16le -ar 16000 -ac 1 udp://ESP32_IP:12346?pkt_size=512#backchannel=1"
+      - "exec:ffmpeg -re -f alaw -ar 8000 -ac 1 -i pipe: -f s16le -ar 16000 -ac 1 udp://XIAOZHI_IP:12346?pkt_size=512#backchannel=1"
+
+    # ESP32-S3 Mini (Intercom Cucina) - if using go2rtc mode
+    intercom_mini:
+      - "exec:ffmpeg -f s16le -ar 16000 -ac 1 -i udp://0.0.0.0:12347?timeout=5000000 -c:a libopus -b:a 48k -f mpegts -"
+      - "exec:ffmpeg -re -f alaw -ar 8000 -ac 1 -i pipe: -f s16le -ar 16000 -ac 1 udp://ESP_MINI_IP:12346?pkt_size=512#backchannel=1"
 ```
 
-Replace `ESP32_IP` with your ESP32's IP address, then restart Home Assistant.
+Replace `XIAOZHI_IP` and `ESP_MINI_IP` with your devices' IP addresses.
 
-> **Note**: If you're on an older HA version, you can still use the go2rtc add-on from the Add-on Store.
+**Docker / Container / LXC**: See detailed instructions in the [go2rtc setup section](#docker--container--lxc-setup).
 
-#### Option B: Docker / Container / LXC
+#### Step 2: Install WebRTC Camera Card
 
-If you run Home Assistant in a container, you need to run go2rtc separately:
-
-```bash
-# Download go2rtc binary
-wget https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64
-chmod +x go2rtc_linux_amd64
-mv go2rtc_linux_amd64 /usr/local/bin/go2rtc
-
-# Create config directory
-mkdir -p /etc/go2rtc
-
-# Create the config file (see below)
-nano /etc/go2rtc/go2rtc.yaml
-
-# Run go2rtc (or create a systemd service)
-go2rtc -config /etc/go2rtc/go2rtc.yaml
-```
-
-**Systemd service** (create `/etc/systemd/system/go2rtc.service`):
-```ini
-[Unit]
-Description=go2rtc
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/go2rtc -config /etc/go2rtc/go2rtc.yaml
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then enable and start:
-```bash
-systemctl enable go2rtc
-systemctl start go2rtc
-```
-
-#### Option C: Docker Compose
-
-```yaml
-version: "3"
-services:
-  go2rtc:
-    image: alexxit/go2rtc
-    container_name: go2rtc
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - ./go2rtc.yaml:/config/go2rtc.yaml
-```
-
-### Step 2: Configure go2rtc (Docker/LXC only)
-
-> **HA OS users**: Skip this step - you already configured go2rtc in `configuration.yaml` above.
-
-For Docker/LXC installations, create or edit your `go2rtc.yaml`:
-
-```yaml
-streams:
-  intercom:
-    # Audio IN: ESP32 microphone -> browser
-    - "exec:ffmpeg -f s16le -ar 16000 -ac 1 -i udp://0.0.0.0:12345?timeout=5000000 -c:a libopus -b:a 48k -f mpegts -"
-    # Audio OUT: browser microphone -> ESP32 speaker (CRITICAL: -re flag!)
-    - "exec:ffmpeg -re -f alaw -ar 8000 -ac 1 -i pipe: -f s16le -ar 16000 -ac 1 udp://ESP32_IP:12346?pkt_size=512#backchannel=1"
-
-webrtc:
-  candidates:
-    - YOUR_HA_IP:8555      # Replace with your Home Assistant IP
-    - stun:8555
-
-api:
-  listen: ":1984"          # go2rtc web UI
-
-rtsp:
-  listen: ":8554"          # RTSP server (optional)
-```
-
-**IMPORTANT**: Replace `ESP32_IP` with your ESP32's IP address and `YOUR_HA_IP` with your Home Assistant's IP.
-
-> **CRITICAL**: The `-re` flag in the backchannel ffmpeg command is essential! Without it, ffmpeg sends packets at 1000x+ speed, causing audio loss.
-
-### Step 3: Install WebRTC Camera Card
-
-The WebRTC Camera custom card is required to display the audio stream with bidirectional communication.
-
-#### Installation via HACS (Recommended)
-
-1. Make sure [HACS](https://hacs.xyz/) is installed
+1. Install [HACS](https://hacs.xyz/) if not already installed
 2. Go to **HACS → Frontend**
-3. Click the **+ Explore & Download Repositories** button
-4. Search for **"WebRTC Camera"**
-5. Click **Download**
-6. Restart Home Assistant
-7. Clear your browser cache
+3. Search for **"WebRTC Camera"** and install
+4. Restart Home Assistant
 
-#### Manual Installation
-
-1. Download the latest release from [AlexxIT/WebRTC](https://github.com/AlexxIT/WebRTC/releases)
-2. Extract and copy `webrtc.js` to your `www` folder
-3. Add to your Lovelace resources:
-   ```yaml
-   resources:
-     - url: /local/webrtc.js
-       type: module
-   ```
-
-### Step 4: Configure the WebRTC Integration
+#### Step 3: Configure WebRTC Integration
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **"WebRTC Camera"**
-3. Configure the go2rtc URL:
-   - For add-on: `http://localhost:1984`
-   - For external: `http://YOUR_GO2RTC_IP:1984`
+3. Configure the go2rtc URL: `http://localhost:1984`
 
-### Step 5: Create the Dashboard
+### For P2P Mode
 
-Create a new dashboard or add this card to an existing one:
+P2P mode requires **no server setup**! Devices discover each other automatically via mDNS.
+
+Just ensure:
+1. Both devices are on the same network
+2. Both are set to "P2P" or "P2P Auto Answer" mode
+3. mDNS/Bonjour is not blocked on your network
+
+### Dashboard Configuration
+
+Create a dashboard with conditional cards for different modes:
 
 ```yaml
-title: Citofono
-views:
-  - title: Citofono
-    path: intercom
-    icon: mdi:doorbell
+type: vertical-stack
+title: "Intercom"
+cards:
+  - type: horizontal-stack
     cards:
-      - type: vertical-stack
-        cards:
-          - show_name: true
-            show_icon: true
-            type: button
-            entity: switch.intercom_streaming
-            hold_action:
-              action: toggle
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: switch.intercom_streaming
-                state: 'on'
-            card:
-              type: custom:webrtc-camera
-              url: intercom
-              mode: webrtc
-              media: audio+microphone
-              muted: false
-              style: >-
-                width: 100%; aspect-ratio: 1/1; background: #1a1a1a;
-                border-radius: 50%;
-          - type: entities
-            entities:
-              - entity: sensor.citofono_porta_intercom_state
-              - entity: number.citofono_porta_speaker_volume
-              - entity: switch.intercom_echo_cancellation
-              - entity: select.intercom_hangup_mode
-              - entity: button.intercom_extend_call
-              - entity: sensor.citofono_porta_wifi_signal
-              - entity: sensor.citofono_porta_tx_packets
-              - entity: sensor.citofono_porta_rx_packets
-              - entity: button.citofono_porta_reset_counters
-      - type: logbook
-        title: Ultima chiamata
-        target:
-          entity_id:
-            - binary_sensor.citofono_porta_doorbell_button
-        hours_to_show: 1
+      - type: button
+        entity: switch.intercom_streaming
+        name: "Streaming"
+        tap_action:
+          action: toggle
+
+  # WebRTC card - only shows in go2rtc mode when streaming
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: switch.intercom_streaming
+        state: "on"
+      - condition: state
+        entity: select.intercom_operating_mode
+        state: "go2rtc"
+    card:
+      type: custom:webrtc-camera
+      url: intercom
+      mode: webrtc
+      media: audio+microphone
+      muted: false
+
+  - type: entities
+    entities:
+      - entity: sensor.intercom_state
+        name: "Status"
+      - entity: select.intercom_operating_mode
+        name: "Mode"
+      - entity: number.intercom_speaker_volume
+        name: "Volume"
+
+  # P2P section - only shows when NOT in go2rtc mode
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: select.intercom_operating_mode
+        state_not: "go2rtc"
+    card:
+      type: entities
+      title: "P2P"
+      entities:
+        - entity: sensor.intercom_current_peer
+          name: "Selected Peer"
+        - entity: text.intercom_target_ip
+          name: "Target IP"
+        - entity: sensor.intercom_discovered_peers
+          name: "Available Peers"
+        - entity: button.intercom_next_peer
+          name: "Next Peer"
+        - entity: button.intercom_refresh_peers
+          name: "Refresh"
 ```
-
-> **Note**: Entity names may vary based on your device name in ESPHome. Adjust accordingly.
-
-### Step 6: Doorbell Notification (Optional)
-
-Create an automation to receive push notifications when someone rings the doorbell:
-
-```yaml
-alias: Doorbell Notification
-description: Send push notification when doorbell rings - tap to open intercom
-triggers:
-  - trigger: event
-    event_type: esphome.doorbell_ring
-conditions: []
-actions:
-  - action: notify.mobile_app_YOUR_PHONE
-    data:
-      title: Doorbell
-      message: Someone is at the door!
-      data:
-        clickAction: /intercom/intercom
-        channel: doorbell
-        importance: high
-        ttl: 0
-        priority: high
-        actions:
-          - action: URI
-            title: Open Intercom
-            uri: /intercom/intercom
-          - action: ANSWER
-            title: Answer
-mode: single
-```
-
-Replace `notify.mobile_app_YOUR_PHONE` with your actual mobile app notification service.
 
 ## Display States
 
-The round display shows different colors and text based on the current state:
+The round display (Xiaozhi only) shows different colors and text based on the current state:
 
 | State | Background | Text Color | Description |
 |-------|------------|------------|-------------|
@@ -375,53 +322,32 @@ The round display shows different colors and text based on the current state:
 | STREAMING | Green | Red | Active call with countdown |
 | ERROR | Red | White | Something went wrong |
 
-When streaming with "Automatic" hangup mode, a countdown timer is displayed (e.g., "Auto: 00:45").
-
 ## Echo Cancellation (AEC)
 
-Version 2.0 includes **ESP-AFE Acoustic Echo Cancellation** powered by Espressif's official audio front-end library.
+ESP-AFE Acoustic Echo Cancellation powered by Espressif's official audio front-end library.
 
-- **Toggle via Home Assistant**: Use the "Echo Cancellation" switch to enable/disable
+- **Toggle via Home Assistant**: Use the "Echo Cancellation" switch
 - **Restart required**: Stop and restart streaming to apply changes
 - **Resource usage**: ~22% CPU when enabled
+- **Best for**: go2rtc mode where you hear your own voice back
 
-The AEC significantly reduces echo during full-duplex calls, making conversations much more natural.
-
-## Auto Hangup Feature
-
-The intercom includes an automatic hangup feature:
+## Auto Hangup Feature (Xiaozhi only)
 
 - **Automatic mode**: Call disconnects after 60 seconds
 - **Manual mode**: Call stays connected until manually ended
-- **Touch to extend**: Touch the display during a call to reset the timer to 60 seconds
+- **Touch to extend**: Touch the display during a call to reset the timer
 - **Extend Call button**: Press in Home Assistant to add 60 more seconds
-
-Configure via `select.intercom_hangup_mode` in Home Assistant.
-
-## Customizing State Translations
-
-Edit the `STATE_TEXTS` map in `custom_components/udp_intercom/udp_intercom.h`:
-
-```cpp
-static const std::map<IntercomState, const char*> STATE_TEXTS = {
-  {IntercomState::IDLE,            "READY"},      // or "PRONTO", "BEREIT", etc.
-  {IntercomState::RINGING,         "DOORBELL"},   // or "CAMPANELLO", "KLINGEL", etc.
-  {IntercomState::STREAMING_OUT,   "SENDING"},
-  {IntercomState::STREAMING_IN,    "RECEIVING"},
-  {IntercomState::STREAMING_DUPLEX,"ON CALL"},    // or "IN LINEA", "IM GESPRÄCH", etc.
-  {IntercomState::ERROR,           "ERROR"},
-};
-```
 
 ## Architecture
 
+### go2rtc Mode
 ```
 ┌─────────────────┐     UDP:12345      ┌──────────────────┐
 │                 │ ──────────────────▶│                  │
 │  Xiaozhi Ball   │     (Mic Audio)    │  Home Assistant  │
 │   ESP32-S3      │                    │    + go2rtc      │
-│   + ES8311      │ ◀──────────────────│    + ffmpeg      │
-│   + ESP-AFE AEC │     UDP:12346      │                  │
+│                 │ ◀──────────────────│    + ffmpeg      │
+│                 │     UDP:12346      │                  │
 └─────────────────┘   (Speaker Audio)  └──────────────────┘
                                               │
                                               │ WebRTC
@@ -432,114 +358,131 @@ static const std::map<IntercomState, const char*> STATE_TEXTS = {
                                        └──────────────┘
 ```
 
+### P2P Mode
+```
+┌─────────────────┐     UDP:12346      ┌─────────────────┐
+│                 │ ◀────────────────▶ │                 │
+│  Xiaozhi Ball   │   (Bidirectional)  │  ESP32-S3 Mini  │
+│   (Kitchen)     │                    │   (Bedroom)     │
+│                 │     mDNS Discovery │                 │
+└─────────────────┘ ◀ ─ ─ ─ ─ ─ ─ ─ ─▶ └─────────────────┘
+        │                                      │
+        │            Home Assistant            │
+        └──────────────▶  │  ◀─────────────────┘
+                    (Control Only)
+```
+
 ## Technical Details
 
 ### Audio Format
 - **Sample Rate**: 16000 Hz
 - **Bit Depth**: 16-bit signed PCM
 - **Channels**: Mono
-- **Protocol**: Raw UDP packets
+- **Protocol**: Raw UDP packets (1024 bytes + 4 byte sequence)
 
 ### Buffer Configuration
 - **DMA Buffers**: 8 × 512 frames
 - **Jitter Buffer**: 8KB (256ms)
 - **Pre-buffer Threshold**: 2KB (64ms)
-- **Audio Chunk Size**: 1024 bytes
 - **AEC Frame Size**: 512 samples (32ms)
-
-### Key Lessons Learned
-
-1. **ffmpeg `-re` flag**: Critical for UDP streaming! Without it, packets are sent way too fast.
-
-2. **I2S Full Duplex**: Use `i2s_new_channel()` with both TX and RX handles for true full duplex.
-
-3. **Jitter Buffer**: Essential for smooth audio - UDP packets can arrive with variable timing.
-
-4. **Task Stack Size**: Audio buffers need stack space - 16KB for the audio task with AEC.
-
-5. **ESP-AFE AEC**: Use `aec_create()` with proper parameters and `aec_get_chunksize()` for frame size.
 
 ## Troubleshooting
 
-### No Audio from Speaker
-- Check that streaming is enabled (`switch.intercom_streaming`)
+### P2P Mode Issues
+
+**Devices don't discover each other**:
+- Ensure both are on the same network subnet
+- Check that mDNS/Bonjour is not blocked by your router
+- Press "Refresh Peers" button
+- Check logs for mDNS query results
+
+**Streaming doesn't start in P2P mode**:
+- Verify "Target IP" is set (should auto-fill from discovery)
+- Check operating mode is "P2P" or "P2P Auto Answer"
+- Check logs for "Starting P2P streaming to..." message
+
+### go2rtc Mode Issues
+
+**No audio from speaker**:
+- Check that streaming is enabled
 - Verify go2rtc is running: visit `http://YOUR_IP:1984`
-- Check the `-re` flag is present in the backchannel ffmpeg command
-- Ensure the ESP32 IP in go2rtc.yaml is correct
+- Ensure the `-re` flag is present in backchannel ffmpeg command
+- Verify ESP32 IP in go2rtc.yaml is correct
 
-### No Audio from Microphone
-- Check that the browser has microphone permission
-- Verify WebRTC connection in browser developer tools
-- Check go2rtc logs for ffmpeg errors
+**No audio from microphone**:
+- Check browser microphone permission
+- Verify WebRTC connection in browser dev tools
 
-### Choppy/Glitchy Audio
-- The jitter buffer should handle this automatically
+### General Issues
+
+**Choppy/Glitchy audio**:
 - Check WiFi signal strength
-- Ensure ESP32 is not too far from the router
+- Ensure ESP32 is not too far from router
 
-### WebRTC Card Shows "Waiting for stream"
-- Verify go2rtc is running
-- Check WebRTC integration configuration
-- Ensure the stream name matches ("intercom")
-
-### Device Keeps Rebooting
-- Check for stack overflow in logs
-- Increase task stack size if needed
-
-### Echo/Feedback
-- Enable the "Echo Cancellation" switch
-- If still present, lower the speaker volume
-
-### Audio Starts Muted / No Sound
-Modern browsers block audio autoplay by default. You need to allow audio for your Home Assistant domain:
-
-- **Chrome/Edge**: Click the lock icon in the URL bar → Site settings → Sound → Allow
-- **Firefox**: Go to `about:config` and set `media.autoplay.default` to `0`
-- **Safari/iOS**: Settings → Safari → Auto-Play → Allow All Auto-Play
-- **Home Assistant Android App**: App settings → Advanced → Allow audio autoplay
-
-This is a browser security feature, not a bug. Once allowed, audio will always start unmuted.
+**Echo/Feedback**:
+- Enable "Echo Cancellation" switch
+- Lower speaker volume
 
 ## Project Structure
 
 ```
 esphome-intercom/
-├── intercom.yaml              # Main ESPHome configuration
+├── intercom.yaml              # Xiaozhi Ball V3 configuration
+├── intercom_mini.yaml         # ESP32-S3 Mini configuration
 ├── secrets.yaml               # WiFi credentials (create this)
+├── CLAUDE.md                  # AI assistant documentation
 ├── README.md                  # This file
+├── readme_img/                # Documentation images
 └── custom_components/
     └── udp_intercom/
         ├── __init__.py        # ESPHome component definition
-        ├── udp_intercom.h     # C++ header with state translations
+        ├── udp_intercom.h     # C++ header with classes and triggers
         └── udp_intercom.cpp   # C++ implementation
 ```
 
 ## Home Assistant Entities
 
-After flashing, the following entities will be available:
+### Common Entities (Both Devices)
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `switch.intercom_streaming` | Switch | Start/stop audio streaming |
-| `switch.intercom_echo_cancellation` | Switch | Enable/disable AEC |
-| `select.intercom_hangup_mode` | Select | Automatic or Manual hangup |
-| `button.intercom_extend_call` | Button | Reset countdown to 60s |
-| `button.intercom_ring_doorbell` | Button | Trigger doorbell ring |
-| `number.intercom_speaker_volume` | Number | Speaker volume 0-100% |
-| `text_sensor.intercom_intercom_state` | Sensor | Current state text |
-| `binary_sensor.intercom_doorbell_button` | Binary | Physical button state |
-| `binary_sensor.intercom_display_touch` | Binary | Touch sensor state |
-| `binary_sensor.intercom_call_active` | Binary | Is call active |
-| `sensor.intercom_wifi_signal` | Sensor | WiFi signal strength |
-| `sensor.intercom_tx_packets` | Sensor | Transmitted packets |
-| `sensor.intercom_rx_packets` | Sensor | Received packets |
+| `switch.*_streaming` | Switch | Start/stop audio streaming |
+| `switch.*_echo_cancellation` | Switch | Enable/disable AEC |
+| `select.*_operating_mode` | Select | go2rtc / P2P / P2P Auto Answer |
+| `number.*_speaker_volume` | Number | Speaker volume 0-100% |
+| `text.*_target_ip` | Text | Target IP for P2P calls |
+| `sensor.*_intercom_state` | Sensor | Current state (IDLE/STREAMING/etc) |
+| `sensor.*_current_peer` | Sensor | Currently selected peer name |
+| `sensor.*_discovered_peers` | Sensor | List of discovered peers |
+| `sensor.*_peer_count` | Sensor | Number of discovered peers |
+| `button.*_next_peer` | Button | Cycle to next peer |
+| `button.*_refresh_peers` | Button | Re-scan for peers |
+| `button.*_restart` | Button | Restart the device |
 
-## Roadmap / TODO
+### Xiaozhi Ball V3 Only
 
-- [ ] **Improve AEC**: Fine-tune echo cancellation parameters for even better performance
-- [ ] **Video Intercom**: Add camera support using ESP32-S3-CAM module. Goal is full video + two-way audio streaming via WebRTC
+| Entity | Type | Description |
+|--------|------|-------------|
+| `select.*_hangup_mode` | Select | Automatic or Manual hangup |
+| `button.*_extend_call` | Button | Reset countdown to 60s |
+| `button.*_ring_doorbell` | Button | Trigger doorbell ring |
+| `binary_sensor.*_doorbell_button` | Binary | Physical button state |
+| `binary_sensor.*_display_touch` | Binary | Touch sensor state |
+| `binary_sensor.*_call_active` | Binary | Is call active |
 
 ## Changelog
+
+### Version 3.0
+- **NEW**: P2P Mode - Direct device-to-device communication without server
+- **NEW**: mDNS peer discovery - Automatic detection of other intercom devices
+- **NEW**: Auto-answer mode - Hands-free operation for secondary units
+- **NEW**: ESP32-S3 Mini support - Use common breakout boards (INMP441 + MAX98357A)
+- **NEW**: Dual I2S bus mode - Separate mic and speaker peripherals
+- **NEW**: Current Peer sensor - Shows selected peer name and IP
+- **NEW**: Next Peer button - Cycle through discovered peers
+- **NEW**: Restart button - Reboot device from Home Assistant
+- **IMPROVED**: Streaming switch now correctly handles P2P target IP
+- **IMPROVED**: Automatic peer switching when selected peer disconnects
 
 ### Version 2.0
 - **NEW**: Echo Cancellation (ESP-AFE AEC) with toggle switch
@@ -552,6 +495,55 @@ After flashing, the following entities will be available:
 - Jitter buffer for smooth playback
 - WebRTC integration via go2rtc
 
+## Docker / Container / LXC Setup
+
+If you run Home Assistant in a container, you need to run go2rtc separately:
+
+```bash
+# Download go2rtc binary
+wget https://github.com/AlexxIT/go2rtc/releases/latest/download/go2rtc_linux_amd64
+chmod +x go2rtc_linux_amd64
+mv go2rtc_linux_amd64 /usr/local/bin/go2rtc
+
+# Create config
+mkdir -p /etc/go2rtc
+cat > /etc/go2rtc/go2rtc.yaml << 'EOF'
+streams:
+  intercom:
+    - "exec:ffmpeg -f s16le -ar 16000 -ac 1 -i udp://0.0.0.0:12345?timeout=5000000 -c:a libopus -b:a 48k -f mpegts -"
+    - "exec:ffmpeg -re -f alaw -ar 8000 -ac 1 -i pipe: -f s16le -ar 16000 -ac 1 udp://ESP32_IP:12346?pkt_size=512#backchannel=1"
+
+webrtc:
+  candidates:
+    - YOUR_HA_IP:8555
+    - stun:8555
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
+EOF
+
+# Create systemd service
+cat > /etc/systemd/system/go2rtc.service << 'EOF'
+[Unit]
+Description=go2rtc
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/go2rtc -config /etc/go2rtc/go2rtc.yaml
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable go2rtc
+systemctl start go2rtc
+```
+
 ## License
 
 MIT License - Feel free to use, modify, and distribute!
@@ -559,7 +551,7 @@ MIT License - Feel free to use, modify, and distribute!
 ## Credits
 
 - **Created by**: Claude (Anthropic) for n-IA-hane
-- **Hardware**: Xiaozhi Ball V3 (小智球 V3)
+- **Hardware**: Xiaozhi Ball V3 (小智球 V3), ESP32-S3 Mini
 - **Frameworks**: ESPHome, Home Assistant, go2rtc, WebRTC, ESP-AFE
 - **Inspiration**: The need for a simple, working intercom solution
 

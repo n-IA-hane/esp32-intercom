@@ -106,6 +106,29 @@ A minimal intercom unit using common breakout boards:
 | | GAIN | Not connected (9dB default) |
 | **Status LED** | DIN | GPIO21 |
 
+### Universal Microphone Configuration (NEW!)
+
+The component now supports **any I2S microphone** through configurable parameters:
+
+```yaml
+udp_intercom:
+  # ... pin configuration ...
+
+  # Microphone Settings (adjust for your hardware)
+  mic_bits_per_sample: 32   # 16 or 32 (INMP441/SPH0645 = 32, others may vary)
+  mic_channel: left         # left, right, or stereo
+  mic_gain: 4               # 1-16 gain multiplier (INMP441 typically needs 4)
+```
+
+| Microphone | Bits | Channel | Typical Gain |
+|------------|------|---------|--------------|
+| INMP441 | 32 | left (L/R→GND) | 4 |
+| SPH0645 | 32 | left | 2-4 |
+| ICS-43434 | 32 | left/right | 2 |
+| Generic PDM | 16 | left | 1 |
+
+This makes it easy to use any I2S microphone without modifying the C++ code!
+
 ### Pin Configuration (Xiaozhi Ball V3)
 
 | Function | GPIO |

@@ -52,8 +52,17 @@ esphome-intercom/
 **Dual Bus (INMP441 + MAX98357A)**:
 - I2S_NUM_0 for microphone (RX only)
 - I2S_NUM_1 for speaker (TX only)
-- INMP441 outputs 32-bit samples, converted to 16-bit with 4x gain
+- Configurable bit width (16 or 32 bit) via `mic_bits_per_sample`
+- Configurable channel (left/right/stereo) via `mic_channel`
+- Configurable gain (1-16x) via `mic_gain`
 - MAX98357A receives 16-bit samples directly
+
+**Universal Microphone Support** (v3.0.1+):
+```yaml
+mic_bits_per_sample: 32  # 16 or 32 bit
+mic_channel: left        # left, right, stereo
+mic_gain: 4              # 1-16 gain multiplier
+```
 
 ### Operating Modes
 

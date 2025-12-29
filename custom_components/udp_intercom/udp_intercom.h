@@ -64,6 +64,12 @@ enum OperatingMode : uint8_t {
   OPERATING_MODE_P2P,     // Direct device-to-device
 };
 
+enum MicChannel : uint8_t {
+  MIC_CHANNEL_LEFT,    // Use left channel only (most common for mono mics)
+  MIC_CHANNEL_RIGHT,   // Use right channel only
+  MIC_CHANNEL_STEREO,  // Use both channels (mono = average)
+};
+
 // =============================================================================
 // State Text Translations
 // =============================================================================
@@ -151,6 +157,11 @@ class UDPIntercom : public Component {
   void set_aec_enabled(bool enabled) { this->aec_enabled_ = enabled; }
   bool get_aec_enabled() const { return this->aec_enabled_; }
   void set_volume_mode(VolumeMode mode) { this->volume_mode_ = mode; }
+
+  // Microphone Configuration (universal - works with any I2S mic)
+  void set_mic_bits_per_sample(int bits) { this->mic_bits_per_sample_ = bits; }
+  void set_mic_channel(MicChannel channel) { this->mic_channel_ = channel; }
+  void set_mic_gain(int gain) { this->mic_gain_ = gain; }
 
   // Runtime volume control (0.0 - 1.0)
   void set_volume(float volume);
@@ -315,6 +326,11 @@ class UDPIntercom : public Component {
   bool aec_enabled_{false};
   VolumeMode volume_mode_{VOLUME_MODE_AUTO};
   float volume_{0.7f};  // 0.0 - 1.0
+
+  // Microphone configuration (universal)
+  int mic_bits_per_sample_{16};       // 16 or 32 bit samples from mic
+  MicChannel mic_channel_{MIC_CHANNEL_LEFT};  // Which channel to use
+  int mic_gain_{1};                   // Gain multiplier (1-16)
 
   // P2P configuration
   bool p2p_enabled_{false};

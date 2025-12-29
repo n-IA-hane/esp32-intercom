@@ -45,6 +45,11 @@ CONF_SPEAKER_DOUT_PIN = "speaker_dout_pin"
 # Hardware
 CONF_SPEAKER_ENABLE_PIN = "speaker_enable_pin"
 
+# Microphone Configuration (universal)
+CONF_MIC_BITS_PER_SAMPLE = "mic_bits_per_sample"
+CONF_MIC_CHANNEL = "mic_channel"
+CONF_MIC_GAIN = "mic_gain"
+
 # Audio Processing
 CONF_AEC_ENABLED = "aec_enabled"
 CONF_VOLUME_MODE = "volume_mode"
@@ -81,6 +86,13 @@ VOLUME_MODES = {
     "auto": VolumeMode.VOLUME_MODE_AUTO,
     "hardware": VolumeMode.VOLUME_MODE_HARDWARE,
     "software": VolumeMode.VOLUME_MODE_SOFTWARE,
+}
+
+MicChannel = udp_intercom_ns.enum("MicChannel")
+MIC_CHANNELS = {
+    "left": MicChannel.MIC_CHANNEL_LEFT,
+    "right": MicChannel.MIC_CHANNEL_RIGHT,
+    "stereo": MicChannel.MIC_CHANNEL_STEREO,
 }
 
 OperatingMode = udp_intercom_ns.enum("OperatingMode")
@@ -167,6 +179,11 @@ CONFIG_SCHEMA = cv.All(
             # Hardware
             cv.Optional(CONF_SPEAKER_ENABLE_PIN): pins.internal_gpio_output_pin_number,
 
+            # Microphone Configuration (universal - works with any I2S mic)
+            cv.Optional(CONF_MIC_BITS_PER_SAMPLE, default=16): cv.one_of(16, 32, int=True),
+            cv.Optional(CONF_MIC_CHANNEL, default="left"): cv.enum(MIC_CHANNELS, lower=True),
+            cv.Optional(CONF_MIC_GAIN, default=1): cv.int_range(min=1, max=16),
+
             # Audio Processing
             cv.Optional(CONF_AEC_ENABLED, default=False): cv.boolean,
             cv.Optional(CONF_VOLUME_MODE, default="auto"): cv.enum(VOLUME_MODES, lower=True),
@@ -236,6 +253,11 @@ async def to_code(config):
     # Hardware
     if CONF_SPEAKER_ENABLE_PIN in config:
         cg.add(var.set_speaker_enable_pin(config[CONF_SPEAKER_ENABLE_PIN]))
+
+    # Microphone Configuration (universal)
+    cg.add(var.set_mic_bits_per_sample(config[CONF_MIC_BITS_PER_SAMPLE]))
+    cg.add(var.set_mic_channel(config[CONF_MIC_CHANNEL]))
+    cg.add(var.set_mic_gain(config[CONF_MIC_GAIN]))
 
     # Audio Processing
     cg.add(var.set_aec_enabled(config[CONF_AEC_ENABLED]))

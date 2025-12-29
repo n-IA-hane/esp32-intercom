@@ -325,17 +325,20 @@ bool UDPIntercom::init_i2s_dual_bus_() {
     return false;
   }
 
-  // INMP441 configuration - outputs 32-bit samples, left channel
-  // Same config as ESPHome's i2s_audio microphone component
+  // Microphone configuration - uses configurable bit width and channel
+  // Supports any I2S microphone (INMP441, SPH0645, ICS-43434, etc.)
+  i2s_data_bit_width_t mic_bit_width = (this->mic_bits_per_sample_ == 32)
+      ? I2S_DATA_BIT_WIDTH_32BIT : I2S_DATA_BIT_WIDTH_16BIT;
+
   i2s_std_config_t mic_std_cfg = {
     .clk_cfg = {
       .sample_rate_hz = this->sample_rate_,
       .clk_src = I2S_CLK_SRC_DEFAULT,
       .mclk_multiple = I2S_MCLK_MULTIPLE_256,
     },
-    .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
+    .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(mic_bit_width, I2S_SLOT_MODE_MONO),
     .gpio_cfg = {
-      .mclk = GPIO_NUM_NC,  // INMP441 doesn't need MCLK
+      .mclk = GPIO_NUM_NC,
       .bclk = (gpio_num_t)this->mic_bclk_pin_,
       .ws = (gpio_num_t)this->mic_lrclk_pin_,
       .dout = GPIO_NUM_NC,
@@ -348,10 +351,26 @@ bool UDPIntercom::init_i2s_dual_bus_() {
     },
   };
 
-  // Match ESPHome's explicit slot configuration
-  // INMP441: 32-bit slot, left channel (L/R pin to GND)
-  mic_std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
-  mic_std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
+  // Set slot bit width to match sample bit width
+  mic_std_cfg.slot_cfg.slot_bit_width = (this->mic_bits_per_sample_ == 32)
+      ? I2S_SLOT_BIT_WIDTH_32BIT : I2S_SLOT_BIT_WIDTH_16BIT;
+
+  // Set channel based on configuration
+  switch (this->mic_channel_) {
+    case MIC_CHANNEL_RIGHT:
+      mic_std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_RIGHT;
+      break;
+    case MIC_CHANNEL_STEREO:
+      mic_std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
+      break;
+    case MIC_CHANNEL_LEFT:
+    default:
+      mic_std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
+      break;
+  }
+
+  ESP_LOGI(TAG, "Mic config: %d-bit, channel=%d, gain=%dx",
+           this->mic_bits_per_sample_, this->mic_channel_, this->mic_gain_);
 
   err = i2s_channel_init_std_mode(this->rx_handle_, &mic_std_cfg);
   if (err != ESP_OK) {
@@ -919,24 +938,44 @@ void UDPIntercom::audio_task(void *params) {
     static bool logged_first_mic_read = false;
 
     if (is_dual_bus) {
-      // INMP441 outputs 32-bit samples - read and convert to 16-bit
-      err = i2s_channel_read(intercom->rx_handle_, mic_buffer_32, mic_read_bytes,
-                              &bytes_read, pdMS_TO_TICKS(50));
-      if (err == ESP_OK && bytes_read == mic_read_bytes) {
-        // Convert 32-bit to 16-bit: INMP441 puts data in upper 24 bits
-        // Take the upper 16 bits (>> 16) for the audio data
-        // Also apply gain boost since INMP441 levels are typically low
-        const int32_t mic_gain = 4;  // 4x gain boost
-        for (int i = 0; i < frame_size; i++) {
-          int32_t sample = mic_buffer_32[i] >> 16;
-          sample *= mic_gain;
-          // Clamp to 16-bit range
-          if (sample > 32767) sample = 32767;
-          if (sample < -32768) sample = -32768;
-          mic_buffer[i] = (int16_t)sample;
+      // Dual bus mode: read from separate microphone I2S bus
+      // Supports both 16-bit and 32-bit microphones via configuration
+      const int32_t mic_gain = intercom->mic_gain_;  // Configurable gain
+      const bool is_32bit = (intercom->mic_bits_per_sample_ == 32);
+
+      if (is_32bit) {
+        // 32-bit mic (e.g., INMP441): read 32-bit samples and convert to 16-bit
+        err = i2s_channel_read(intercom->rx_handle_, mic_buffer_32, mic_read_bytes,
+                                &bytes_read, pdMS_TO_TICKS(50));
+        if (err == ESP_OK && bytes_read == mic_read_bytes) {
+          // Convert 32-bit to 16-bit: most mics put data in upper bits
+          // Take the upper 16 bits (>> 16) and apply configurable gain
+          for (int i = 0; i < frame_size; i++) {
+            int32_t sample = mic_buffer_32[i] >> 16;
+            sample *= mic_gain;
+            // Clamp to 16-bit range
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
+            mic_buffer[i] = (int16_t)sample;
+          }
+          bytes_read = frame_bytes;  // Normalize to 16-bit size
         }
+      } else {
+        // 16-bit mic: read directly and apply gain
+        err = i2s_channel_read(intercom->rx_handle_, mic_buffer, frame_bytes,
+                                &bytes_read, pdMS_TO_TICKS(50));
+        if (err == ESP_OK && bytes_read == frame_bytes && mic_gain > 1) {
+          // Apply gain to 16-bit samples
+          for (int i = 0; i < frame_size; i++) {
+            int32_t sample = mic_buffer[i] * mic_gain;
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
+            mic_buffer[i] = (int16_t)sample;
+          }
+        }
+      }
 
-
+      if (err == ESP_OK && bytes_read > 0) {
         bytes_read = frame_bytes;  // Normalize to 16-bit size for the check below
       }
     } else {

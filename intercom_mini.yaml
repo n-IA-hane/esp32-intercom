@@ -113,6 +113,13 @@ udp_intercom:
   speaker_dout_pin: GPIO8    # DIN
 
   # ─────────────────────────────────────────────────────────────────────────
+  # Microphone Settings (Universal - works with any I2S mic)
+  # ─────────────────────────────────────────────────────────────────────────
+  mic_bits_per_sample: 32   # INMP441 outputs 32-bit (24-bit data in upper bits)
+  mic_channel: left         # L/R pin to GND = left channel
+  mic_gain: 4               # Gain multiplier (1-16) - INMP441 needs boost
+
+  # ─────────────────────────────────────────────────────────────────────────
   # Network - go2rtc mode (can also work with P2P)
   # ─────────────────────────────────────────────────────────────────────────
   server_ip: "192.168.1.10"   # Home Assistant IP

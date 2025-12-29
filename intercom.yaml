@@ -40,6 +40,22 @@ esphome:
           // Apply saved AEC state
           id(intercom_component).set_aec_enabled(id(aec_switch).state);
           ESP_LOGI("boot", "AEC state: %s", id(aec_switch).state ? "ON" : "OFF");
+
+          // Sync operating mode from restored select value
+          auto mode = id(operating_mode).state;
+          if (mode == "P2P Auto Answer") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(true);
+            ESP_LOGI("boot", "Mode synced: P2P Auto Answer");
+          } else if (mode == "P2P") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("boot", "Mode synced: P2P");
+          } else {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_GO2RTC);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("boot", "Mode synced: go2rtc");
+          }
       - component.update: main_display
 
 esp32:
@@ -80,6 +96,18 @@ wifi:
     ssid: "Intercom Fallback"
 
 # =============================================================================
+# mDNS SERVICE FOR P2P DISCOVERY
+# =============================================================================
+mdns:
+  services:
+    - service: "_udp-intercom"
+      protocol: "_udp"
+      port: 12346
+      txt:
+        device: ${name}
+        type: "intercom"
+
+# =============================================================================
 # I2C FOR ES8311 CODEC CONTROL
 # =============================================================================
 i2c:
@@ -105,17 +133,43 @@ external_components:
 
 udp_intercom:
   id: intercom_component
-  server_ip: "192.168.1.10"      # Your Home Assistant IP
-  server_port: 12345             # UDP port for mic audio (ESP32 -> HA)
-  listen_port: 12346             # UDP port for speaker audio (HA -> ESP32)
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # I2S Configuration - SINGLE BUS MODE (ES8311 codec)
+  # ─────────────────────────────────────────────────────────────────────────
+  i2s_mode: single
   sample_rate: 16000
-  # I2S pins for Xiaozhi Ball V3
   i2s_lrclk_pin: GPIO45
   i2s_bclk_pin: GPIO9
   i2s_mclk_pin: GPIO16
   i2s_din_pin: GPIO10            # Microphone data in
   i2s_dout_pin: GPIO8            # Speaker data out
   speaker_enable_pin: GPIO46
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Network - go2rtc mode (default)
+  # ─────────────────────────────────────────────────────────────────────────
+  server_ip: "192.168.1.10"      # Your Home Assistant IP
+  server_port: 12345             # UDP port for mic audio (ESP32 -> HA)
+  listen_port: 12346             # UDP port for speaker audio (HA -> ESP32)
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # P2P Mode - For walkie-talkie with other ESP devices
+  # ─────────────────────────────────────────────────────────────────────────
+  p2p_enabled: true
+  p2p_service_name: "udp-intercom"
+  p2p_auto_answer: false         # Xiaozhi has buttons, no auto-answer
+  p2p_timeout: 30s               # Longer timeout for manual hangup
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Audio Processing
+  # ─────────────────────────────────────────────────────────────────────────
+  aec_enabled: true              # ES8311 with PSRAM octal supports AEC
+  volume_mode: hardware          # Use ES8311 hardware DAC for volume
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Triggers
+  # ─────────────────────────────────────────────────────────────────────────
   on_ring:
     - homeassistant.event:
         event: esphome.doorbell_ring
@@ -146,6 +200,48 @@ udp_intercom:
     - lambda: id(main_display).update();
     # Turn off LED when call ends
     - light.turn_off: status_led
+  on_peer_discovered:
+    - logger.log:
+        format: "Peer discovered: %s at %s"
+        args: ["name.c_str()", "ip.c_str()"]
+    # Auto-fill the target IP with the first discovered peer
+    - lambda: |-
+        if (id(manual_peer_ip).state.empty()) {
+          auto call = id(manual_peer_ip).make_call();
+          call.set_value(ip);
+          call.perform();
+          ESP_LOGI("p2p", "Auto-set target IP to discovered peer: %s", ip.c_str());
+        }
+    - lambda: id(main_display).update();
+  on_peer_lost:
+    - logger.log:
+        format: "Peer lost: %s"
+        args: ["name.c_str()"]
+    # If the lost peer was selected, switch to another available peer
+    - lambda: |-
+        std::string current_ip = id(manual_peer_ip).state;
+        auto& peers = id(intercom_component).get_peers();
+        bool found = false;
+        for (const auto& peer : peers) {
+          if (peer.ip == current_ip) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          if (!peers.empty()) {
+            auto call = id(manual_peer_ip).make_call();
+            call.set_value(peers[0].ip);
+            call.perform();
+            ESP_LOGI("p2p", "Peer lost, switched to: %s (%s)", peers[0].name.c_str(), peers[0].ip.c_str());
+          } else {
+            auto call = id(manual_peer_ip).make_call();
+            call.set_value("");
+            call.perform();
+            ESP_LOGI("p2p", "No peers available");
+          }
+        }
+    - lambda: id(main_display).update();
 
 # =============================================================================
 # SENSORS
@@ -173,6 +269,14 @@ sensor:
     lambda: return id(intercom_component).get_rx_packets();
     entity_category: diagnostic
 
+  - platform: template
+    name: "Peer Count"
+    id: peer_count
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: return id(intercom_component).get_peer_count();
+    entity_category: diagnostic
+
 text_sensor:
   - platform: template
     name: "Intercom State"
@@ -182,6 +286,38 @@ text_sensor:
       auto state = id(intercom_component).get_state();
       // Returns translated state text - wrap in std::string for ESPHome
       return {std::string(id(intercom_component).get_state_text(state))};
+
+  - platform: template
+    name: "Current Peer"
+    id: current_peer_text
+    icon: "mdi:account-check"
+    update_interval: 2s
+    lambda: |-
+      std::string target_ip = id(manual_peer_ip).state;
+      if (target_ip.empty()) return std::string("(nessuno)");
+      auto& peers = id(intercom_component).get_peers();
+      for (const auto& peer : peers) {
+        if (peer.ip == target_ip) {
+          return peer.name + " (" + peer.ip + ")";
+        }
+      }
+      return std::string("IP: ") + target_ip;
+
+  - platform: template
+    name: "Discovered Peers"
+    id: discovered_peers_text
+    update_interval: 5s
+    entity_category: diagnostic
+    lambda: |-
+      int count = id(intercom_component).get_peer_count();
+      if (count == 0) return std::string("No peers found");
+      std::string result;
+      auto& peer_list = id(intercom_component).get_peers();
+      for (size_t i = 0; i < peer_list.size(); i++) {
+        if (i > 0) result += ", ";
+        result += peer_list[i].name + " (" + peer_list[i].ip + ")";
+      }
+      return result;
 
 # =============================================================================
 # BINARY SENSORS
@@ -260,9 +396,36 @@ switch:
           ESP_LOGI("aec", "Echo Cancellation DISABLED (restart streaming to apply)");
 
 # =============================================================================
-# SELECT FOR HANGUP MODE
+# SELECT FOR OPERATING MODE AND HANGUP MODE
 # =============================================================================
 select:
+  - platform: template
+    name: "Operating Mode"
+    id: operating_mode
+    icon: "mdi:swap-horizontal"
+    optimistic: true
+    restore_value: true
+    options:
+      - "go2rtc"
+      - "P2P"
+      - "P2P Auto Answer"
+    initial_option: "go2rtc"
+    set_action:
+      - lambda: |-
+          if (x == "P2P Auto Answer") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(true);
+            ESP_LOGI("mode", "Operating mode: P2P Auto Answer");
+          } else if (x == "P2P") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("mode", "Operating mode: P2P (manual answer)");
+          } else {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_GO2RTC);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("mode", "Operating mode: go2rtc");
+          }
+
   - platform: template
     name: "Hangup Mode"
     id: hangup_mode
@@ -273,6 +436,21 @@ select:
       - "Automatic"
       - "Manual"
     initial_option: "Automatic"
+
+# =============================================================================
+# TEXT INPUT FOR MANUAL PEER IP
+# =============================================================================
+text:
+  - platform: template
+    name: "Target IP"
+    id: manual_peer_ip
+    icon: "mdi:ip-network"
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    mode: text
+    min_length: 0
+    max_length: 15
 
 # =============================================================================
 # INTERVAL FOR COUNTDOWN AND BLINKING
@@ -351,6 +529,39 @@ button:
     entity_category: diagnostic
     on_press:
       - lambda: id(intercom_component).reset_counters();
+
+  - platform: template
+    name: "Refresh Peers"
+    icon: "mdi:refresh"
+    on_press:
+      - udp_intercom.refresh_peers:
+          id: intercom_component
+
+  - platform: template
+    name: "Next Peer"
+    icon: "mdi:account-arrow-right"
+    on_press:
+      - lambda: |-
+          auto& peers = id(intercom_component).get_peers();
+          if (peers.empty()) {
+            ESP_LOGW("peer", "No peers discovered");
+            return;
+          }
+          std::string current_ip = id(manual_peer_ip).state;
+          int current_idx = -1;
+          for (size_t i = 0; i < peers.size(); i++) {
+            if (peers[i].ip == current_ip) {
+              current_idx = i;
+              break;
+            }
+          }
+          int next_idx = (current_idx + 1) % peers.size();
+          auto& next_peer = peers[next_idx];
+          auto call = id(manual_peer_ip).make_call();
+          call.set_value(next_peer.ip);
+          call.perform();
+          ESP_LOGI("peer", "Selected peer %d/%d: %s (%s)",
+                   next_idx + 1, peers.size(), next_peer.name.c_str(), next_peer.ip.c_str());
 
 # =============================================================================
 # OUTPUT & LIGHTS
@@ -488,22 +699,22 @@ display:
       bool is_streaming = false;
 
       switch (state) {
-        case udp_intercom::IntercomState::IDLE:
+        case udp_intercom::INTERCOM_STATE_IDLE:
           bg_color = id(color_idle);
           text_color = id(color_text_idle);      // Green text
           break;
-        case udp_intercom::IntercomState::RINGING:
+        case udp_intercom::INTERCOM_STATE_RINGING:
           bg_color = id(color_ringing);
           text_color = id(color_text_ringing);   // Blue text (will blink)
           break;
-        case udp_intercom::IntercomState::STREAMING_DUPLEX:
-        case udp_intercom::IntercomState::STREAMING_IN:
-        case udp_intercom::IntercomState::STREAMING_OUT:
+        case udp_intercom::INTERCOM_STATE_STREAMING_DUPLEX:
+        case udp_intercom::INTERCOM_STATE_STREAMING_IN:
+        case udp_intercom::INTERCOM_STATE_STREAMING_OUT:
           bg_color = id(color_streaming);
           text_color = id(color_text_streaming); // Red text
           is_streaming = true;
           break;
-        case udp_intercom::IntercomState::ERROR:
+        case udp_intercom::INTERCOM_STATE_ERROR:
           bg_color = id(color_error);
           text_color = id(color_white);
           break;
@@ -518,7 +729,7 @@ display:
       it.print(cx, 30, id(font_title), id(color_white), TextAlign::CENTER, "INTERCOM");
 
       // State text in center - blink if RINGING
-      if (state == udp_intercom::IntercomState::RINGING) {
+      if (state == udp_intercom::INTERCOM_STATE_RINGING) {
         // Blinking text for RINGING
         if (id(blink_state)) {
           it.print(cx, cy, id(font_state), text_color, TextAlign::CENTER, state_text);

@@ -1,0 +1,438 @@
+# =============================================================================
+# ESP32-S3 MINI INTERCOM - Dual I2S Bus (INMP441 + MAX98357A)
+# =============================================================================
+# Hardware: ESP32-S3 Mini + INMP441 Mic + MAX98357A Amplifier
+# Features: P2P mode with auto-answer, software volume control
+# No display, no buttons - designed as a secondary intercom unit
+#
+# Created by Claude (Anthropic) for n-IA-hane
+# https://github.com/n-IA-hane/esp32-intercom
+# =============================================================================
+
+substitutions:
+  name: intercom-mini
+  friendly_name: Intercom Mini
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.5.0
+  name_add_mac_suffix: false
+  platformio_options:
+    board_build.flash_mode: dio
+  on_boot:
+    priority: -100  # Run after everything is initialized
+    then:
+      - lambda: |-
+          // Sync operating mode from restored select value
+          auto mode = id(operating_mode).state;
+          if (mode == "P2P Auto Answer") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(true);
+            ESP_LOGI("boot", "Mode synced: P2P Auto Answer");
+          } else if (mode == "P2P") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("boot", "Mode synced: P2P");
+          } else {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_GO2RTC);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("boot", "Mode synced: go2rtc");
+          }
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+api:
+  id: api_server
+
+ota:
+  - platform: esphome
+
+logger:
+  hardware_uart: UART0
+  level: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Intercom-Mini Fallback"
+
+# =============================================================================
+# mDNS SERVICE FOR P2P DISCOVERY
+# =============================================================================
+mdns:
+  services:
+    - service: "_udp-intercom"
+      protocol: "_udp"
+      port: 12346
+      txt:
+        device: ${name}
+        type: "intercom"
+
+# =============================================================================
+# UDP INTERCOM COMPONENT - Dual I2S Mode
+# =============================================================================
+external_components:
+  - source:
+      type: local
+      path: custom_components
+
+udp_intercom:
+  id: intercom_component
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # I2S Configuration - DUAL BUS MODE
+  # ─────────────────────────────────────────────────────────────────────────
+  i2s_mode: dual
+  sample_rate: 16000
+
+  # Microphone (INMP441) - I2S_NUM_0
+  mic_lrclk_pin: GPIO3    # WS
+  mic_bclk_pin: GPIO2     # SCK
+  mic_din_pin: GPIO4      # SD
+
+  # Speaker (MAX98357A) - I2S_NUM_1
+  speaker_lrclk_pin: GPIO6   # LRC
+  speaker_bclk_pin: GPIO7    # BCLK
+  speaker_dout_pin: GPIO8    # DIN
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Network - go2rtc mode (can also work with P2P)
+  # ─────────────────────────────────────────────────────────────────────────
+  server_ip: "192.168.1.10"   # Home Assistant IP
+  server_port: 12345
+  listen_port: 12346
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # P2P Mode - For walkie-talkie with other ESP devices
+  # ─────────────────────────────────────────────────────────────────────────
+  p2p_enabled: true
+  p2p_service_name: "udp-intercom"
+  p2p_auto_answer: true       # Auto-answer incoming calls (no button)
+  p2p_timeout: 30s            # Match Xiaozhi timeout
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Audio Processing
+  # ─────────────────────────────────────────────────────────────────────────
+  aec_enabled: false          # Disabled by default (PSRAM quad is limited)
+  volume_mode: software       # No hardware DAC, use software volume
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Triggers
+  # ─────────────────────────────────────────────────────────────────────────
+  on_ring:
+    - light.turn_on:
+        id: status_led
+        brightness: 100%
+        red: 1
+        green: 0.6
+        blue: 0
+        effect: "Fast Pulse"
+  on_call_start:
+    - light.turn_on:
+        id: status_led
+        brightness: 100%
+        red: 0
+        green: 1
+        blue: 0
+        effect: "None"
+  on_call_end:
+    - light.turn_off: status_led
+  on_peer_discovered:
+    - logger.log:
+        format: "Peer discovered: %s at %s"
+        args: ["name.c_str()", "ip.c_str()"]
+    # Auto-fill the target IP with the first discovered peer
+    - lambda: |-
+        if (id(manual_peer_ip).state.empty()) {
+          auto call = id(manual_peer_ip).make_call();
+          call.set_value(ip);
+          call.perform();
+          ESP_LOGI("p2p", "Auto-set target IP to discovered peer: %s", ip.c_str());
+        }
+  on_peer_lost:
+    - logger.log:
+        format: "Peer lost: %s"
+        args: ["name.c_str()"]
+    # If the lost peer was selected, switch to another available peer
+    - lambda: |-
+        std::string current_ip = id(manual_peer_ip).state;
+        auto& peers = id(intercom_component).get_peers();
+        // Check if current IP still exists in peer list
+        bool found = false;
+        for (const auto& peer : peers) {
+          if (peer.ip == current_ip) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          if (!peers.empty()) {
+            auto call = id(manual_peer_ip).make_call();
+            call.set_value(peers[0].ip);
+            call.perform();
+            ESP_LOGI("p2p", "Peer lost, switched to: %s (%s)", peers[0].name.c_str(), peers[0].ip.c_str());
+          } else {
+            auto call = id(manual_peer_ip).make_call();
+            call.set_value("");
+            call.perform();
+            ESP_LOGI("p2p", "No peers available");
+          }
+        }
+
+# =============================================================================
+# SENSORS
+# =============================================================================
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_db
+    update_interval: 30s
+    entity_category: diagnostic
+
+  - platform: template
+    name: "TX Packets"
+    id: tx_packets
+    accuracy_decimals: 0
+    update_interval: 2s
+    lambda: return id(intercom_component).get_tx_packets();
+    entity_category: diagnostic
+
+  - platform: template
+    name: "RX Packets"
+    id: rx_packets
+    accuracy_decimals: 0
+    update_interval: 2s
+    lambda: return id(intercom_component).get_rx_packets();
+    entity_category: diagnostic
+
+  - platform: template
+    name: "Peer Count"
+    id: peer_count
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: return id(intercom_component).get_peer_count();
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: template
+    name: "Intercom State"
+    id: intercom_state_text
+    update_interval: 1s
+    lambda: |-
+      auto state = id(intercom_component).get_state();
+      return {std::string(id(intercom_component).get_state_text(state))};
+
+  - platform: template
+    name: "Current Peer"
+    id: current_peer_text
+    icon: "mdi:account-check"
+    update_interval: 2s
+    lambda: |-
+      std::string target_ip = id(manual_peer_ip).state;
+      if (target_ip.empty()) return std::string("(nessuno)");
+      auto& peers = id(intercom_component).get_peers();
+      for (const auto& peer : peers) {
+        if (peer.ip == target_ip) {
+          return peer.name + " (" + peer.ip + ")";
+        }
+      }
+      return std::string("IP: ") + target_ip;
+
+  - platform: template
+    name: "Discovered Peers"
+    id: discovered_peers_text
+    update_interval: 5s
+    entity_category: diagnostic
+    lambda: |-
+      int count = id(intercom_component).get_peer_count();
+      if (count == 0) return std::string("No peers found");
+      std::string result;
+      auto& peer_list = id(intercom_component).get_peers();
+      for (size_t i = 0; i < peer_list.size(); i++) {
+        if (i > 0) result += ", ";
+        result += peer_list[i].name + " (" + peer_list[i].ip + ")";
+      }
+      return result;
+
+# =============================================================================
+# SELECT FOR OPERATING MODE
+# =============================================================================
+select:
+  - platform: template
+    name: "Operating Mode"
+    id: operating_mode
+    icon: "mdi:swap-horizontal"
+    optimistic: true
+    restore_value: true
+    options:
+      - "go2rtc"
+      - "P2P"
+      - "P2P Auto Answer"
+    initial_option: "P2P Auto Answer"
+    set_action:
+      - lambda: |-
+          if (x == "P2P Auto Answer") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(true);
+            ESP_LOGI("mode", "Operating mode: P2P Auto Answer");
+          } else if (x == "P2P") {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_P2P);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("mode", "Operating mode: P2P (manual answer)");
+          } else {
+            id(intercom_component).set_operating_mode(udp_intercom::OPERATING_MODE_GO2RTC);
+            id(intercom_component).set_p2p_auto_answer(false);
+            ESP_LOGI("mode", "Operating mode: go2rtc");
+          }
+
+# =============================================================================
+# TEXT INPUT FOR MANUAL PEER IP
+# =============================================================================
+text:
+  - platform: template
+    name: "Target IP"
+    id: manual_peer_ip
+    icon: "mdi:ip-network"
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    mode: text
+    min_length: 0
+    max_length: 15
+
+# =============================================================================
+# SWITCHES
+# =============================================================================
+switch:
+  - platform: template
+    name: "Streaming"
+    id: streaming_switch
+    icon: "mdi:phone"
+    turn_on_action:
+      - udp_intercom.start_streaming:
+          id: intercom_component
+    turn_off_action:
+      - udp_intercom.stop_streaming:
+          id: intercom_component
+    lambda: return id(intercom_component).is_streaming();
+
+  - platform: template
+    name: "Echo Cancellation"
+    id: aec_switch
+    icon: "mdi:microphone-off"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(intercom_component).set_aec_enabled(true);
+          ESP_LOGI("aec", "Echo Cancellation ENABLED");
+    turn_off_action:
+      - lambda: |-
+          id(intercom_component).set_aec_enabled(false);
+          ESP_LOGI("aec", "Echo Cancellation DISABLED");
+
+# =============================================================================
+# VOLUME CONTROL
+# =============================================================================
+number:
+  - platform: template
+    name: "Speaker Volume"
+    id: speaker_volume
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 70
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    icon: "mdi:volume-high"
+    set_action:
+      - lambda: |-
+          id(intercom_component).set_volume(x / 100.0);
+          ESP_LOGI("volume", "Speaker volume: %.0f%%", x);
+
+# =============================================================================
+# BUTTONS
+# =============================================================================
+button:
+  - platform: template
+    name: "Refresh Peers"
+    icon: "mdi:refresh"
+    on_press:
+      - udp_intercom.refresh_peers:
+          id: intercom_component
+
+  - platform: template
+    name: "Next Peer"
+    icon: "mdi:account-arrow-right"
+    on_press:
+      - lambda: |-
+          auto& peers = id(intercom_component).get_peers();
+          if (peers.empty()) {
+            ESP_LOGW("peer", "No peers discovered");
+            return;
+          }
+          // Find current peer index based on Target IP
+          std::string current_ip = id(manual_peer_ip).state;
+          int current_idx = -1;
+          for (size_t i = 0; i < peers.size(); i++) {
+            if (peers[i].ip == current_ip) {
+              current_idx = i;
+              break;
+            }
+          }
+          // Select next peer (or first if current not found)
+          int next_idx = (current_idx + 1) % peers.size();
+          auto& next_peer = peers[next_idx];
+          // Update Target IP
+          auto call = id(manual_peer_ip).make_call();
+          call.set_value(next_peer.ip);
+          call.perform();
+          ESP_LOGI("peer", "Selected peer %d/%d: %s (%s)",
+                   next_idx + 1, peers.size(), next_peer.name.c_str(), next_peer.ip.c_str());
+
+  - platform: template
+    name: "Reset Counters"
+    icon: "mdi:counter"
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(intercom_component).reset_counters();
+
+  - platform: restart
+    name: "Restart"
+
+# =============================================================================
+# STATUS LED (WS2812 on GPIO21)
+# =============================================================================
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "Status LED"
+    pin: GPIO21
+    chipset: WS2812
+    num_leds: 1
+    rgb_order: RGB
+    effects:
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 0.3s
+          update_interval: 0.3s
+          min_brightness: 0%
+          max_brightness: 100%

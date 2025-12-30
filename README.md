@@ -6,7 +6,7 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 ![ESPHome](https://img.shields.io/badge/ESPHome-2025.5+-green)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Compatible-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-3.0-brightgreen)
+![Version](https://img.shields.io/badge/Version-3.1-brightgreen)
 
 ---
 
@@ -111,7 +111,7 @@ A minimal intercom unit using common breakout boards:
 The component now supports **any I2S microphone** through configurable parameters:
 
 ```yaml
-udp_intercom:
+i2s_audio_udp:
   # ... pin configuration ...
 
   # Microphone Settings (adjust for your hardware)
@@ -457,10 +457,17 @@ esphome-intercom/
 ├── README.md                  # This file
 ├── readme_img/                # Documentation images
 └── custom_components/
-    └── udp_intercom/
-        ├── __init__.py        # ESPHome component definition
-        ├── udp_intercom.h     # C++ header with classes and triggers
-        └── udp_intercom.cpp   # C++ implementation
+    ├── i2s_audio_udp/         # Core I2S + UDP audio streaming
+    │   ├── __init__.py
+    │   ├── i2s_audio_udp.h
+    │   └── i2s_audio_udp.cpp
+    ├── mdns_discovery/        # P2P peer discovery via mDNS
+    │   ├── __init__.py
+    │   ├── mdns_discovery.h
+    │   └── mdns_discovery.cpp
+    └── esp_aec/               # Echo cancellation (optional)
+        ├── __init__.py
+        └── esp_aec.h
 ```
 
 ## Home Assistant Entities
@@ -494,6 +501,16 @@ esphome-intercom/
 | `binary_sensor.*_call_active` | Binary | Is call active |
 
 ## Changelog
+
+### Version 3.1 (Current)
+- **REFACTORED**: Modular architecture with separate components:
+  - `i2s_audio_udp` - Core audio streaming (replaces monolithic udp_intercom)
+  - `mdns_discovery` - P2P peer discovery
+  - `esp_aec` - Echo cancellation (optional)
+- **NEW**: P2P call signaling via ESPHome's native `udp:` component
+- **NEW**: HANGUP signal when call ends - other device stops automatically
+- **NEW**: Centralized network config via `target_peer_ip` and `target_peer_port` entities
+- **IMPROVED**: Operating mode switch automatically sets IP/port for go2rtc or P2P
 
 ### Version 3.0
 - **NEW**: P2P Mode - Direct device-to-device communication without server

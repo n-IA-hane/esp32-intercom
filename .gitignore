@@ -11,22 +11,36 @@ venv/
 
 # Backups
 backup_*/
+backups/
 
 # System files
 .DS_Store
 *.swp
 *.swo
+*.kate-swp
 *~
-
-# Claude documentation (local project notes)
-claude.md
 
 # Python cache
 __pycache__/
 *.pyc
 
-# Test files
-troiaio-palletta.yaml
-libs/
+# Local documentation and notes
 CLAUDE.md
+claude.md
 refactoring_prompt.txt
+*.txt
+
+# Test and personal config files
+test_*.yaml
+troiaio-palletta.yaml
+microopenwakeword.yaml
+
+# User YAML configs (use examples/ as templates)
+intercom.yaml
+intercom_mini.yaml
+
+# Allow example files
+!examples/*.yaml
+
+# Libraries (use submodules or install separately)
+libs/

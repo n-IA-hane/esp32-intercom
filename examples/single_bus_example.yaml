@@ -1,0 +1,234 @@
+# =============================================================================
+# ESP32 Intercom - Single I2S Bus Example (ES8311 codec)
+# =============================================================================
+# Use this template for devices with a single audio codec handling both
+# microphone and speaker (e.g., ES8311, ES8388, WM8960)
+#
+# Adjust pins and settings for your specific hardware.
+# =============================================================================
+
+substitutions:
+  name: intercom
+  friendly_name: Intercom
+  # Network settings
+  ha_ip: "192.168.1.10"      # Home Assistant IP (for go2rtc mode)
+  go2rtc_port: "12345"       # go2rtc listening port
+  p2p_port: "12346"          # P2P streaming port
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+api:
+
+ota:
+  - platform: esphome
+
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${name} Fallback"
+
+# =============================================================================
+# mDNS SERVICE FOR P2P DISCOVERY
+# =============================================================================
+mdns:
+  services:
+    - service: "_udp-intercom"
+      protocol: "_udp"
+      port: ${p2p_port}
+      txt:
+        device: ${name}
+        type: "intercom"
+
+# =============================================================================
+# EXTERNAL COMPONENTS
+# =============================================================================
+external_components:
+  - source:
+      type: local
+      path: custom_components
+
+# =============================================================================
+# mDNS DISCOVERY
+# =============================================================================
+mdns_discovery:
+  id: discovery_component
+  service_type: "_udp-intercom._udp"
+  scan_interval: 30s
+  on_peer_found:
+    - logger.log:
+        format: "Peer found: %s at %s"
+        args: ["name.c_str()", "ip.c_str()"]
+  on_peer_lost:
+    - logger.log:
+        format: "Peer lost: %s"
+        args: ["name.c_str()"]
+
+# =============================================================================
+# I2S AUDIO UDP - Single Bus Configuration
+# =============================================================================
+i2s_audio_udp:
+  id: audio_component
+
+  # I2S pins (adjust for your hardware)
+  i2s_lrclk_pin: GPIO45
+  i2s_bclk_pin: GPIO9
+  i2s_mclk_pin: GPIO16
+  i2s_din_pin: GPIO10      # Microphone data
+  i2s_dout_pin: GPIO8      # Speaker data
+
+  sample_rate: 16000
+  speaker_enable_pin: GPIO46  # Optional: amplifier enable
+
+  # Network configuration
+  remote_ip: !lambda 'return id(target_peer_ip).state;'
+  remote_port: !lambda 'return (uint16_t)id(target_peer_port).state;'
+  listen_port: ${p2p_port}
+
+  on_start:
+    - logger.log: "Streaming started"
+  on_stop:
+    - logger.log: "Streaming stopped"
+  on_error:
+    - logger.log:
+        format: "Audio error: %s"
+        args: ["error.c_str()"]
+
+# =============================================================================
+# SENSORS
+# =============================================================================
+sensor:
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_component
+    tx_packets:
+      name: "TX Packets"
+    rx_packets:
+      name: "RX Packets"
+
+  - platform: mdns_discovery
+    mdns_discovery_id: discovery_component
+    peer_count:
+      name: "Peer Count"
+
+text_sensor:
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_component
+    audio_mode:
+      name: "Audio Mode"
+
+  - platform: mdns_discovery
+    mdns_discovery_id: discovery_component
+    peers_list:
+      name: "Discovered Peers"
+
+# =============================================================================
+# OPERATING MODE SELECT
+# =============================================================================
+select:
+  - platform: template
+    name: "Operating Mode"
+    id: operating_mode
+    icon: "mdi:swap-horizontal"
+    optimistic: true
+    restore_value: true
+    options:
+      - "go2rtc"
+      - "P2P"
+      - "P2P Auto Answer"
+    initial_option: "P2P Auto Answer"
+    on_value:
+      then:
+        - lambda: |-
+            if (x == "go2rtc") {
+              id(target_peer_ip).make_call().set_value("${ha_ip}").perform();
+              id(target_peer_port).make_call().set_value(${go2rtc_port}).perform();
+            } else {
+              id(target_peer_port).make_call().set_value(${p2p_port}).perform();
+            }
+
+# =============================================================================
+# TARGET IP/PORT
+# =============================================================================
+text:
+  - platform: template
+    name: "Target IP"
+    id: target_peer_ip
+    icon: "mdi:ip-network"
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    mode: text
+    min_length: 0
+    max_length: 15
+
+number:
+  - platform: template
+    name: "Target Port"
+    id: target_peer_port
+    min_value: 1024
+    max_value: 65535
+    step: 1
+    initial_value: ${p2p_port}
+    optimistic: true
+    restore_value: true
+    entity_category: diagnostic
+
+  - platform: template
+    name: "Speaker Volume"
+    id: speaker_volume
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 70
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    set_action:
+      - lambda: id(audio_component).set_volume(x / 100.0);
+
+# =============================================================================
+# STREAMING SWITCH
+# =============================================================================
+switch:
+  - platform: template
+    name: "Streaming"
+    id: streaming_switch
+    icon: "mdi:phone"
+    turn_on_action:
+      - i2s_audio_udp.start:
+          id: audio_component
+    turn_off_action:
+      - i2s_audio_udp.stop:
+          id: audio_component
+    lambda: return id(audio_component).is_streaming();
+
+# =============================================================================
+# BUTTONS
+# =============================================================================
+button:
+  - platform: template
+    name: "Refresh Peers"
+    icon: "mdi:refresh"
+    on_press:
+      - lambda: id(discovery_component).scan_now();
+
+  - platform: restart
+    name: "Restart"

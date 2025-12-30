@@ -1,0 +1,66 @@
+# Example: TX Only - Microphone to UDP
+# Only sends audio from mic to remote, no speaker
+# Audio mode auto-deduced: AUDIO_MODE_TX_ONLY
+
+substitutions:
+  device_name: mic-streamer
+  go2rtc_server: "192.168.1.10"
+
+esphome:
+  name: ${device_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+api:
+ota:
+  - platform: esphome
+
+external_components:
+  - source:
+      type: local
+      path: ../custom_components
+    components: [i2s_audio_udp]
+
+# Only mic pins configured -> TX_ONLY mode auto-deduced
+i2s_audio_udp:
+  id: audio_bridge
+  mic_din_pin: 4
+  mic_bclk_pin: 5
+  mic_lrclk_pin: 6
+  mic_bits_per_sample: 32
+  mic_channel: left
+  mic_gain: 4
+  remote_ip: ${go2rtc_server}
+  remote_port: 12345
+  listen_port: 12346  # Still needed but won't be used for RX
+
+sensor:
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_bridge
+    tx_packets:
+      name: "TX Packets"
+
+text_sensor:
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_bridge
+    audio_mode:
+      name: "Audio Mode"  # Will show "TX_ONLY"
+
+switch:
+  - platform: template
+    name: "Streaming"
+    optimistic: true
+    turn_on_action:
+      - i2s_audio_udp.start:
+          id: audio_bridge
+    turn_off_action:
+      - i2s_audio_udp.stop:
+          id: audio_bridge

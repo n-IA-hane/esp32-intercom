@@ -1,0 +1,70 @@
+# Example: RX Only - UDP to Speaker
+# Only receives audio from remote and plays on speaker, no mic
+# Audio mode auto-deduced: AUDIO_MODE_RX_ONLY
+
+substitutions:
+  device_name: speaker-receiver
+  audio_source: "192.168.1.20"
+
+esphome:
+  name: ${device_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+api:
+ota:
+  - platform: esphome
+
+external_components:
+  - source:
+      type: local
+      path: ../custom_components
+    components: [i2s_audio_udp]
+
+# Only speaker pins configured -> RX_ONLY mode auto-deduced
+i2s_audio_udp:
+  id: audio_bridge
+  speaker_dout_pin: 15
+  speaker_bclk_pin: 16
+  speaker_lrclk_pin: 17
+  speaker_enable_pin: 48  # Optional amp enable
+  remote_ip: ${audio_source}
+  remote_port: 12346  # Still needed but won't be used for TX
+  listen_port: 12346
+
+sensor:
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_bridge
+    rx_packets:
+      name: "RX Packets"
+
+text_sensor:
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_bridge
+    audio_mode:
+      name: "Audio Mode"  # Will show "RX_ONLY"
+
+number:
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_bridge
+    volume:
+      name: "Volume"
+
+switch:
+  - platform: template
+    name: "Streaming"
+    optimistic: true
+    turn_on_action:
+      - i2s_audio_udp.start:
+          id: audio_bridge
+    turn_off_action:
+      - i2s_audio_udp.stop:
+          id: audio_bridge

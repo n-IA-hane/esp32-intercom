@@ -3,44 +3,33 @@
 .pioenvs/
 .pio/
 
-# Secrets - never commit!
+# Secrets
 secrets.yaml
 
-# Python virtual environment
+# Python
 venv/
-
-# Backups
-backup_*/
-backups/
+__pycache__/
+*.pyc
 
 # System files
 .DS_Store
 *.swp
 *.swo
-*.kate-swp
 *~
 
-# Python cache
-__pycache__/
-*.pyc
+# Backups
+backup_*/
+backups/
 
-# Local documentation and notes
-CLAUDE.md
-claude.md
-refactoring_prompt.txt
+# Local files
 *.txt
+*.md
+!README.md
+!custom_components/**/README.md
 
-# Test and personal config files
-test_*.yaml
-troiaio-palletta.yaml
-microopenwakeword.yaml
-
-# User YAML configs (use examples/ as templates)
-intercom.yaml
-intercom_mini.yaml
-
-# Allow example files
+# User configs (copy from examples/)
+*.yaml
 !examples/*.yaml
 
-# Libraries (use submodules or install separately)
+# Libraries
 libs/

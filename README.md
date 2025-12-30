@@ -6,7 +6,7 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 ![ESPHome](https://img.shields.io/badge/ESPHome-2025.5+-green)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Compatible-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-3.1-brightgreen)
+![Version](https://img.shields.io/badge/Version-4.0-brightgreen)
 
 ---
 
@@ -128,6 +128,37 @@ i2s_audio_udp:
 | Generic PDM | 16 | left | 1 |
 
 This makes it easy to use any I2S microphone without modifying the C++ code!
+
+### Mono-Directional Audio (Speaker-Only or Mic-Only)
+
+The component auto-detects streaming direction based on pin configuration:
+
+**Speaker-only (receive audio):**
+```yaml
+i2s_audio_udp:
+  speaker_lrclk_pin: GPIO6
+  speaker_bclk_pin: GPIO7
+  speaker_dout_pin: GPIO8
+  # No mic pins = receive only
+  remote_ip: "192.168.1.10"
+  listen_port: 12346
+```
+
+**Mic-only (transmit audio):**
+```yaml
+i2s_audio_udp:
+  mic_lrclk_pin: GPIO3
+  mic_bclk_pin: GPIO2
+  mic_din_pin: GPIO4
+  # No speaker pins = transmit only
+  remote_ip: "192.168.1.10"
+  remote_port: 12346
+```
+
+**Use cases:**
+- One-way announcements (speaker-only receivers)
+- Audio monitoring (mic-only transmitters)
+- Baby monitor, broadcast systems
 
 ### Pin Configuration (Xiaozhi Ball V3)
 
@@ -502,11 +533,12 @@ esphome-intercom/
 
 ## Changelog
 
-### Version 3.1 (Current)
+### Version 4.0 (Current)
 - **REFACTORED**: Modular architecture with separate components:
   - `i2s_audio_udp` - Core audio streaming (replaces monolithic udp_intercom)
   - `mdns_discovery` - P2P peer discovery
   - `esp_aec` - Echo cancellation (optional)
+- **NEW**: Mono-directional audio support (speaker-only or mic-only)
 - **NEW**: P2P call signaling via ESPHome's native `udp:` component
 - **NEW**: HANGUP signal when call ends - other device stops automatically
 - **NEW**: Centralized network config via `target_peer_ip` and `target_peer_port` entities

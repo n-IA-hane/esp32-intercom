@@ -108,7 +108,7 @@ Uses ESPHome's native `udp:` component on port 12350:
 
 ## Version History
 
-- **v3.1**: Refactored to separate components (i2s_audio_udp, mdns_discovery, esp_aec)
+- **v4.0**: Modular architecture, mono-directional audio, P2P call/hangup signaling
 - **v3.0**: P2P mode, dual hardware support
 - **v2.0**: Echo cancellation
 - **v1.0**: Initial go2rtc streaming

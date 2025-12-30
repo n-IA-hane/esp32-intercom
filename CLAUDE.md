@@ -13,10 +13,12 @@ custom_components/
 └── esp_aec/           # Echo cancellation (ESP-AFE)
 ```
 
-## Hardware Tested
+## Hardware
 
-| Device | Audio | Config |
-|--------|-------|--------|
+Works with any ESP32 + I2S audio. Example configs provided:
+
+| Example | Audio Type | Config |
+|---------|------------|--------|
 | Xiaozhi Ball V3 | ES8311 codec (single I2S) | `intercom.yaml` |
 | ESP32-S3 Mini | INMP441 + MAX98357A (dual I2S) | `intercom_mini.yaml` |
 

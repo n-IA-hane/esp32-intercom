@@ -56,41 +56,42 @@ https://github.com/n-IA-hane/esphome-intercom/raw/master/readme_img/call.mp4
   <img src="readme_img/Dashboard_p2p.jpg" width="500" alt="P2P Mode Dashboard"/>
 </p>
 
-### Device-Specific Features
+### Example Features Comparison
 
-| Feature | Xiaozhi Ball V3 | ESP32-S3 Mini |
-|---------|-----------------|---------------|
-| Round Display | Yes (GC9A01A 240x240) | No |
-| Doorbell Button | Yes | No |
-| Touch Sensor | Yes | No |
-| Auto Hangup | Yes (with countdown) | No |
-| Status LED | WS2812 RGB | WS2812 RGB |
-| Volume Control | Hardware (ES8311) | Software |
+| Feature | Xiaozhi Example | ESP Mini Example | Your Build |
+|---------|-----------------|------------------|------------|
+| Display | GC9A01A 240x240 | None | Optional |
+| Doorbell Button | GPIO0 | None | Optional |
+| Touch Sensor | GPIO12 | None | Optional |
+| Status LED | WS2812 | WS2812 | Optional |
+| Volume Control | Hardware (ES8311) | Software | Depends on codec |
 
 ## Supported Hardware
 
-### 1. Xiaozhi Ball V3 (小智球 V3) - Primary Unit
+The `i2s_audio_udp` component is **hardware-agnostic** and works with any ESP32 board with I2S audio peripherals. Configure the pins for your specific hardware.
 
-This project was developed and tested on the **Xiaozhi Ball V3**, a Chinese smart speaker featuring:
-- ESP32-S3 with 16MB Flash and 8MB PSRAM
-- ES8311 audio codec (I2C controlled, single I2S bus)
-- GC9A01A 240x240 round display
-- WS2812 RGB LED, capacitive touch sensor
-- Built-in microphone and speaker
+### Supported Configurations
 
-You can find this device on AliExpress by searching for "Xiaozhi Ball V3" or "小智球 V3".
+| Mode | Microphone | Speaker | Use Case |
+|------|------------|---------|----------|
+| **Single I2S Bus** | Codec (ES8311, ES8388, etc.) | Same codec | All-in-one devices |
+| **Dual I2S Bus** | I2S mic (INMP441, SPH0645) | I2S amp (MAX98357A, PCM5102) | DIY builds |
+| **Mic-only** | Any I2S mic | None | Transmit only |
+| **Speaker-only** | None | Any I2S amp | Receive only |
 
-**Configuration file**: `intercom.yaml`
+### Tested Examples
 
-### 2. ESP32-S3 Mini + INMP441 + MAX98357A - Secondary Unit (NEW in v3.0!)
+The following configurations are tested and provided as reference:
 
-A minimal intercom unit using common breakout boards:
-- ESP32-S3 Mini development board
-- INMP441 I2S MEMS microphone
-- MAX98357A I2S amplifier with speaker
-- WS2812 status LED (optional)
+#### Xiaozhi Ball V3 (小智球 V3)
+- **Type**: Single I2S bus with ES8311 codec
+- **Config**: `intercom.yaml`
+- **Features**: Round display, touch sensor, doorbell button
 
-**Configuration file**: `intercom_mini.yaml`
+#### ESP32-S3 Mini + INMP441 + MAX98357A
+- **Type**: Dual I2S bus (separate mic and speaker)
+- **Config**: `intercom_mini.yaml`
+- **Features**: Minimal DIY build with common breakout boards
 
 #### Wiring for ESP32-S3 Mini
 
@@ -623,7 +624,7 @@ MIT License - Feel free to use, modify, and distribute!
 ## Credits
 
 - **Created by**: Claude (Anthropic) for n-IA-hane
-- **Hardware**: Xiaozhi Ball V3 (小智球 V3), ESP32-S3 Mini
+- **Tested on**: Xiaozhi Ball V3, ESP32-S3 Mini (but works with any ESP32 + I2S)
 - **Frameworks**: ESPHome, Home Assistant, go2rtc, WebRTC, ESP-AFE
 - **Inspiration**: The need for a simple, working intercom solution
 

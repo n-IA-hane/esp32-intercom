@@ -29,3 +29,4 @@ __pycache__/
 troiaio-palletta.yaml
 libs/
 CLAUDE.md
+refactoring_prompt.txt

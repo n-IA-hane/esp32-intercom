@@ -3,6 +3,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/helpers.h"
+#include "esphome/core/ring_buffer.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/number/number.h"
@@ -46,7 +47,6 @@ enum MicChannel : uint8_t {
 class I2SAudioUDP : public Component {
  public:
   void setup() override;
-  void loop() override {}  // Empty - no business logic
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
@@ -179,6 +179,7 @@ class I2SAudioUDP : public Component {
   volatile bool streaming_{false};
   i2s_chan_handle_t tx_handle_{nullptr};
   i2s_chan_handle_t rx_handle_{nullptr};
+  std::unique_ptr<RingBuffer> audio_ring_buffer_;
   int send_socket_{-1};
   int recv_socket_{-1};
   struct sockaddr_in remote_addr_;

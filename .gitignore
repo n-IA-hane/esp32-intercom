@@ -30,6 +30,9 @@ backups/
 # User configs (copy from examples/)
 *.yaml
 !examples/*.yaml
+# Real working examples (documented use cases)
+!intercom.yaml
+!intercom_mini.yaml
 
 # Libraries
 libs/

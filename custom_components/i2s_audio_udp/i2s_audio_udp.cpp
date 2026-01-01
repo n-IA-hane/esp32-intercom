@@ -23,60 +23,17 @@ static const char *TAG = "i2s_audio_udp";
 static const size_t AUDIO_BUFFER_SIZE = 1024;
 static const size_t DMA_BUFFER_COUNT = 8;
 static const size_t DMA_BUFFER_SIZE = 512;
+static const size_t RING_BUFFER_SIZE = 8192;
 
-// Jitter buffer
-static const size_t JITTER_BUFFER_SIZE = 8192;
-static uint8_t jitter_buffer[JITTER_BUFFER_SIZE];
-static volatile size_t jitter_write_pos = 0;
-static volatile size_t jitter_read_pos = 0;
-static volatile size_t jitter_available = 0;
-
-static size_t jitter_write(const uint8_t *data, size_t len) {
-  size_t written = 0;
-  while (written < len && jitter_available < JITTER_BUFFER_SIZE) {
-    jitter_buffer[jitter_write_pos] = data[written];
-    jitter_write_pos = (jitter_write_pos + 1) % JITTER_BUFFER_SIZE;
-    jitter_available++;
-    written++;
-  }
-  return written;
-}
-
-static size_t jitter_read(uint8_t *data, size_t len) {
-  size_t read = 0;
-  while (read < len && jitter_available > 0) {
-    data[read] = jitter_buffer[jitter_read_pos];
-    jitter_read_pos = (jitter_read_pos + 1) % JITTER_BUFFER_SIZE;
-    jitter_available--;
-    read++;
-  }
-  return read;
-}
+// FreeRTOS task parameters
+static const size_t TASK_STACK_SIZE = 4096;
+static const ssize_t TASK_PRIORITY = 19;
 
 void I2SAudioUDP::setup() {
-  ESP_LOGI(TAG, "Setting up I2S Audio UDP...");
+  ESP_LOGD(TAG, "Setting up...");
 
   // Deduce bus mode and audio mode from pin configuration
   this->deduce_modes_();
-
-  ESP_LOGI(TAG, "  Bus Mode: %s", this->bus_mode_ == I2S_BUS_SINGLE ? "SINGLE" : "DUAL");
-  ESP_LOGI(TAG, "  Audio Mode: %s", this->get_audio_mode_text());
-  ESP_LOGI(TAG, "  Sample Rate: %d Hz", this->sample_rate_);
-
-  if (this->bus_mode_ == I2S_BUS_SINGLE) {
-    ESP_LOGI(TAG, "  I2S pins: LRCLK=%d, BCLK=%d, MCLK=%d, DIN=%d, DOUT=%d",
-             this->i2s_lrclk_pin_, this->i2s_bclk_pin_, this->i2s_mclk_pin_,
-             this->i2s_din_pin_, this->i2s_dout_pin_);
-  } else {
-    if (this->audio_mode_ == AUDIO_MODE_TX_ONLY || this->audio_mode_ == AUDIO_MODE_FULL_DUPLEX) {
-      ESP_LOGI(TAG, "  Mic pins: LRCLK=%d, BCLK=%d, DIN=%d",
-               this->mic_lrclk_pin_, this->mic_bclk_pin_, this->mic_din_pin_);
-    }
-    if (this->audio_mode_ == AUDIO_MODE_RX_ONLY || this->audio_mode_ == AUDIO_MODE_FULL_DUPLEX) {
-      ESP_LOGI(TAG, "  Speaker pins: LRCLK=%d, BCLK=%d, DOUT=%d",
-               this->speaker_lrclk_pin_, this->speaker_bclk_pin_, this->speaker_dout_pin_);
-    }
-  }
 
   // Enable speaker amplifier if configured
   if (this->speaker_enable_pin_ >= 0) {
@@ -85,10 +42,9 @@ void I2SAudioUDP::setup() {
     io_conf.mode = GPIO_MODE_OUTPUT;
     gpio_config(&io_conf);
     gpio_set_level((gpio_num_t)this->speaker_enable_pin_, 1);
-    ESP_LOGI(TAG, "Speaker amplifier enabled on GPIO%d", this->speaker_enable_pin_);
   }
 
-  ESP_LOGI(TAG, "I2S Audio UDP ready");
+  ESP_LOGI(TAG, "Setup complete");
 }
 
 void I2SAudioUDP::dump_config() {
@@ -160,7 +116,7 @@ void I2SAudioUDP::apply_software_volume_(int16_t *buffer, size_t samples) {
 }
 
 bool I2SAudioUDP::init_i2s_single_bus_() {
-  ESP_LOGI(TAG, "Initializing I2S Single Bus...");
+  ESP_LOGD(TAG, "Initializing I2S Single Bus...");
 
   bool need_tx = (this->audio_mode_ == AUDIO_MODE_RX_ONLY || this->audio_mode_ == AUDIO_MODE_FULL_DUPLEX);
   bool need_rx = (this->audio_mode_ == AUDIO_MODE_TX_ONLY || this->audio_mode_ == AUDIO_MODE_FULL_DUPLEX);
@@ -220,12 +176,12 @@ bool I2SAudioUDP::init_i2s_single_bus_() {
     i2s_channel_enable(this->rx_handle_);
   }
 
-  ESP_LOGI(TAG, "I2S Single Bus initialized");
+  ESP_LOGD(TAG, "I2S Single Bus initialized");
   return true;
 }
 
 bool I2SAudioUDP::init_i2s_dual_bus_() {
-  ESP_LOGI(TAG, "Initializing I2S Dual Bus...");
+  ESP_LOGD(TAG, "Initializing I2S Dual Bus...");
 
   bool need_mic = (this->audio_mode_ == AUDIO_MODE_TX_ONLY || this->audio_mode_ == AUDIO_MODE_FULL_DUPLEX);
   bool need_speaker = (this->audio_mode_ == AUDIO_MODE_RX_ONLY || this->audio_mode_ == AUDIO_MODE_FULL_DUPLEX);
@@ -280,7 +236,7 @@ bool I2SAudioUDP::init_i2s_dual_bus_() {
     }
 
     i2s_channel_enable(this->rx_handle_);
-    ESP_LOGI(TAG, "Mic initialized: %d-bit, channel=%s, gain=%dx",
+    ESP_LOGD(TAG, "Mic initialized: %d-bit, channel=%s, gain=%dx",
              this->mic_bits_per_sample_,
              this->mic_channel_ == MIC_CHANNEL_LEFT ? "left" : "right",
              this->mic_gain_);
@@ -334,7 +290,7 @@ bool I2SAudioUDP::init_i2s_dual_bus_() {
     i2s_channel_enable(this->tx_handle_);
   }
 
-  ESP_LOGI(TAG, "I2S Dual Bus initialized");
+  ESP_LOGD(TAG, "I2S Dual Bus initialized");
   return true;
 }
 
@@ -349,7 +305,7 @@ void I2SAudioUDP::deinit_i2s_() {
     i2s_del_channel(this->rx_handle_);
     this->rx_handle_ = nullptr;
   }
-  ESP_LOGI(TAG, "I2S deinitialized");
+  ESP_LOGD(TAG, "I2S deinitialized");
 }
 
 bool I2SAudioUDP::init_sockets_() {
@@ -364,7 +320,7 @@ bool I2SAudioUDP::init_sockets_() {
     this->listen_port_ = this->listen_port_func_();
   }
 
-  ESP_LOGI(TAG, "Network config: remote=%s:%d, listen=%d",
+  ESP_LOGD(TAG, "Network config: remote=%s:%d, listen=%d",
            this->remote_ip_.c_str(), this->remote_port_, this->listen_port_);
 
   if (this->remote_ip_.empty()) {
@@ -425,7 +381,7 @@ bool I2SAudioUDP::init_sockets_() {
     setsockopt(this->recv_socket_, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
   }
 
-  ESP_LOGI(TAG, "UDP sockets initialized");
+  ESP_LOGD(TAG, "UDP sockets initialized");
   return true;
 }
 
@@ -439,7 +395,7 @@ void I2SAudioUDP::close_sockets_() {
     this->recv_socket_ = -1;
   }
   vTaskDelay(pdMS_TO_TICKS(50));
-  ESP_LOGI(TAG, "UDP sockets closed");
+  ESP_LOGD(TAG, "UDP sockets closed");
 }
 
 void I2SAudioUDP::audio_task(void *params) {
@@ -454,7 +410,7 @@ void I2SAudioUDP::audio_task(void *params) {
   if (frame_size <= 0) frame_size = 256;
   size_t frame_bytes = frame_size * sizeof(int16_t);
 
-  ESP_LOGI(TAG, "Audio task started: frame_size=%d samples", frame_size);
+  ESP_LOGD(TAG, "Audio task started: frame_size=%d samples", frame_size);
 
   bool is_dual_bus = (self->bus_mode_ == I2S_BUS_DUAL);
   bool has_tx = (self->audio_mode_ == AUDIO_MODE_TX_ONLY || self->audio_mode_ == AUDIO_MODE_FULL_DUPLEX);
@@ -484,10 +440,13 @@ void I2SAudioUDP::audio_task(void *params) {
   uint8_t udp_buffer[AUDIO_BUFFER_SIZE];
   size_t bytes_read, bytes_written;
 
-  // Reset jitter buffer
-  jitter_write_pos = 0;
-  jitter_read_pos = 0;
-  jitter_available = 0;
+  // Create ring buffer
+  self->audio_ring_buffer_ = RingBuffer::create(RING_BUFFER_SIZE);
+  if (self->audio_ring_buffer_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate ring buffer");
+    vTaskDelete(NULL);
+    return;
+  }
 
   const size_t PREBUFFER_THRESHOLD = 2048;
   bool prebuffering = true;
@@ -504,7 +463,7 @@ void I2SAudioUDP::audio_task(void *params) {
                                      0, nullptr, nullptr);
         if (received > 0) {
           self->rx_packets_++;
-          jitter_write(udp_buffer, received);
+          self->audio_ring_buffer_->write((void*)udp_buffer, received);
         } else if (received < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
           break;
         } else {
@@ -514,20 +473,21 @@ void I2SAudioUDP::audio_task(void *params) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // JITTER BUFFER -> SPEAKER
+    // RING BUFFER -> SPEAKER
     // ═══════════════════════════════════════════════════════════════════════
     if (has_rx && spk_buffer && self->tx_handle_) {
       memset(spk_buffer, 0, frame_bytes);
+      size_t available = self->audio_ring_buffer_->available();
 
       if (prebuffering) {
-        if (jitter_available >= PREBUFFER_THRESHOLD) {
+        if (available >= PREBUFFER_THRESHOLD) {
           prebuffering = false;
-          ESP_LOGI(TAG, "Prebuffer complete, starting playback");
+          ESP_LOGD(TAG, "Prebuffer complete, starting playback");
         }
       }
 
-      if (!prebuffering && jitter_available >= frame_bytes) {
-        size_t got = jitter_read((uint8_t*)spk_buffer, frame_bytes);
+      if (!prebuffering && available >= frame_bytes) {
+        size_t got = self->audio_ring_buffer_->read((void*)spk_buffer, frame_bytes, 0);
         if (got == frame_bytes) {
           self->apply_software_volume_(spk_buffer, frame_size);
           i2s_channel_write(self->tx_handle_, spk_buffer, frame_bytes, &bytes_written, pdMS_TO_TICKS(50));
@@ -538,7 +498,7 @@ void I2SAudioUDP::audio_task(void *params) {
           }
 #endif
         }
-      } else if (!prebuffering && jitter_available == 0) {
+      } else if (!prebuffering && available == 0) {
         prebuffering = true;
         ESP_LOGW(TAG, "Buffer underrun, rebuffering...");
       }
@@ -559,9 +519,7 @@ void I2SAudioUDP::audio_task(void *params) {
           for (int i = 0; i < frame_size; i++) {
             int32_t sample = mic_buffer_32[i] >> 16;
             sample *= mic_gain;
-            if (sample > 32767) sample = 32767;
-            if (sample < -32768) sample = -32768;
-            mic_buffer[i] = (int16_t)sample;
+            mic_buffer[i] = (int16_t)std::clamp(sample, (int32_t)-32768, (int32_t)32767);
           }
           bytes_read = frame_bytes;
         }
@@ -571,9 +529,7 @@ void I2SAudioUDP::audio_task(void *params) {
         if (err == ESP_OK && bytes_read == frame_bytes && mic_gain > 1) {
           for (int i = 0; i < frame_size; i++) {
             int32_t sample = mic_buffer[i] * mic_gain;
-            if (sample > 32767) sample = 32767;
-            if (sample < -32768) sample = -32768;
-            mic_buffer[i] = (int16_t)sample;
+            mic_buffer[i] = (int16_t)std::clamp(sample, (int32_t)-32768, (int32_t)32767);
           }
         }
       }
@@ -601,7 +557,8 @@ void I2SAudioUDP::audio_task(void *params) {
     // Periodic stats
     uint32_t now = millis();
     if (now - last_stats_log > 5000) {
-      ESP_LOGI(TAG, "Streaming stats: TX=%u RX=%u", self->tx_packets_, self->rx_packets_);
+      ESP_LOGD(TAG, "Stats: TX=%u RX=%u buf=%d", self->tx_packets_, self->rx_packets_,
+               self->audio_ring_buffer_->available());
       last_stats_log = now;
     }
   }
@@ -612,8 +569,9 @@ void I2SAudioUDP::audio_task(void *params) {
   if (spk_buffer) heap_caps_free(spk_buffer);
   if (aec_output) heap_caps_free(aec_output);
   if (last_speaker) heap_caps_free(last_speaker);
+  self->audio_ring_buffer_.reset();
 
-  ESP_LOGI(TAG, "Audio task stopped");
+  ESP_LOGD(TAG, "Audio task stopped");
   vTaskDelete(NULL);
 }
 
@@ -651,7 +609,7 @@ void I2SAudioUDP::start() {
 
   // Create audio task
   BaseType_t result = xTaskCreatePinnedToCore(
-    audio_task, "i2s_audio_udp", 16384, this, 10, &this->audio_task_handle_, 1
+    audio_task, "i2s_audio_udp", TASK_STACK_SIZE, this, TASK_PRIORITY, &this->audio_task_handle_, 1
   );
 
   if (result != pdPASS) {
@@ -673,7 +631,7 @@ void I2SAudioUDP::stop() {
     return;
   }
 
-  ESP_LOGI(TAG, "Stopping audio streaming...");
+  ESP_LOGD(TAG, "Stopping audio streaming...");
 
   this->streaming_ = false;
 

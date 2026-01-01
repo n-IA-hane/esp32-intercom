@@ -6,7 +6,7 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 ![ESPHome](https://img.shields.io/badge/ESPHome-2025.5+-green)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Compatible-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Version](https://img.shields.io/badge/Version-4.0-brightgreen)
+![Version](https://img.shields.io/badge/Version-4.1-brightgreen)
 
 ---
 
@@ -30,6 +30,12 @@ A full-duplex audio intercom system using ESP32-S3 with ESPHome and Home Assista
 >
 > — Claude, your friendly neighborhood AI assistant
 
+### Real-World Success Story
+
+> *"I tested the component with the Home Assistant Companion app while I was away from home. I managed to talk to my partner through the intercom - I didn't expect it to work given all the variables involved (NAT, mobile network, WebRTC...). It was a pleasant surprise! With version 4.1, the audio is crystal clear - no more glitches or background artifacts."*
+>
+> — n-IA-hane, project creator
+
 ## Demo
 
 https://github.com/n-IA-hane/esphome-intercom/raw/master/readme_img/call.mp4
@@ -40,11 +46,11 @@ https://github.com/n-IA-hane/esphome-intercom/raw/master/readme_img/call.mp4
 
 ### Core Features
 - **Full Duplex Audio**: Simultaneous microphone and speaker operation
+- **Crystal Clear Audio**: ESPHome RingBuffer with optimized jitter handling - no glitches!
 - **Echo Cancellation (AEC)**: ESP-AFE powered acoustic echo cancellation with ON/OFF switch
 - **WebRTC Support**: Stream audio to any browser via go2rtc
-- **Home Assistant Integration**: Full control from HA dashboards
+- **Home Assistant Integration**: Full control from HA dashboards and Companion app
 - **Volume Control**: Adjustable speaker volume (hardware or software)
-- **Jitter Buffer**: Smooth audio playback without glitches
 
 ### P2P Mode (NEW in v3.0!)
 - **Direct Device-to-Device**: No server required - ESP devices talk directly to each other
@@ -437,8 +443,9 @@ ESP-AFE Acoustic Echo Cancellation powered by Espressif's official audio front-e
 
 ### Buffer Configuration
 - **DMA Buffers**: 8 × 512 frames
-- **Jitter Buffer**: 8KB (256ms)
+- **Ring Buffer**: 8KB ESPHome RingBuffer (thread-safe, efficient)
 - **Pre-buffer Threshold**: 2KB (64ms)
+- **FreeRTOS Task**: Stack 4096, Priority 19 (optimized for real-time audio)
 - **AEC Frame Size**: 512 samples (32ms)
 
 ## Troubleshooting
@@ -482,8 +489,8 @@ ESP-AFE Acoustic Echo Cancellation powered by Espressif's official audio front-e
 
 ```
 esphome-intercom/
-├── intercom.yaml              # Xiaozhi Ball V3 configuration
-├── intercom_mini.yaml         # ESP32-S3 Mini configuration
+├── intercom.yaml              # Xiaozhi Ball V3 - REAL working example
+├── intercom_mini.yaml         # ESP32-S3 Mini - REAL working example
 ├── secrets.yaml               # WiFi credentials (create this)
 ├── CLAUDE.md                  # AI assistant documentation
 ├── README.md                  # This file
@@ -501,6 +508,8 @@ esphome-intercom/
         ├── __init__.py
         └── esp_aec.h
 ```
+
+> **Note**: The example YAML files (`intercom.yaml` and `intercom_mini.yaml`) are **real, tested configurations** used daily by the project maintainer. They include comprehensive English documentation explaining each section and can serve as templates for your own builds.
 
 ## Home Assistant Entities
 
@@ -534,7 +543,16 @@ esphome-intercom/
 
 ## Changelog
 
-### Version 4.0 (Current)
+### Version 4.1 (Current)
+- **IMPROVED**: Replaced custom jitter buffer with ESPHome's native `RingBuffer` class
+- **IMPROVED**: Optimized FreeRTOS task parameters (stack 4096, priority 19)
+- **IMPROVED**: Cleaner logging levels (reduced verbosity, proper ESP_LOGD/LOGI usage)
+- **IMPROVED**: Code cleanup - removed empty `loop()`, using `std::clamp` consistently
+- **FIXED**: Audio glitches and background artifacts eliminated
+- **DOCS**: Professional English documentation for all YAML configurations
+- **DOCS**: Example configurations are now fully documented real-world use cases
+
+### Version 4.0
 - **REFACTORED**: Modular architecture with separate components:
   - `i2s_audio_udp` - Core audio streaming (replaces monolithic udp_intercom)
   - `mdns_discovery` - P2P peer discovery

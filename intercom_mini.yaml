@@ -1,0 +1,615 @@
+# ==============================================================================
+# ESP32-S3 MINI INTERCOM - Dual I2S Bus Configuration
+# ==============================================================================
+#
+# OVERVIEW:
+# Compact intercom device using separate I2S peripherals for microphone and
+# speaker. Ideal for scenarios where independent audio hardware is preferred
+# over a combined codec solution.
+#
+# HARDWARE:
+# - Board: ESP32-S3 Mini (4MB Flash + PSRAM)
+# - Microphone: INMP441 I2S MEMS microphone
+# - Speaker: MAX98357A I2S amplifier module
+# - LED: WS2812 RGB status indicator
+#
+# KEY DIFFERENCES FROM FULL INTERCOM:
+# - Dual I2S bus: Separate buses for mic (I2S_NUM_0) and speaker (I2S_NUM_1)
+# - No display: Headless operation, controlled via Home Assistant
+# - No codec: Uses digital I2S mic + Class D amplifier directly
+# - Software volume: Volume control via digital gain (not hardware DAC)
+#
+# COMPONENTS USED:
+# - i2s_audio_udp: Core audio streaming over UDP
+# - mdns_discovery: Automatic peer discovery on local network
+#
+# OPERATING MODES:
+# - go2rtc: Connect to go2rtc server on Home Assistant for WebRTC bridging
+# - P2P: Direct peer-to-peer audio streaming
+# - P2P Auto Answer: P2P mode with automatic call answering
+#
+# SIGNALING PROTOCOL (UDP port 12350):
+# - CALL:device_name:device_ip:target_name  - Initiate call to target
+# - HANGUP:device_name:device_ip            - Terminate active call
+#
+# Repository: https://github.com/n-IA-hane/esphome-intercom
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# SUBSTITUTIONS
+# Define device-specific variables used throughout the configuration
+# ------------------------------------------------------------------------------
+substitutions:
+  name: intercom-mini              # Device hostname and entity prefix
+  friendly_name: Intercom Mini     # Human-readable name in Home Assistant
+  ha_ip: "192.168.1.10"            # Home Assistant IP (for go2rtc mode)
+  go2rtc_port: "12347"             # go2rtc server UDP port (unique per device)
+  p2p_port: "12346"                # P2P audio streaming port (shared)
+
+# ------------------------------------------------------------------------------
+# ESPHOME CORE CONFIGURATION
+# ------------------------------------------------------------------------------
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.5.0
+  name_add_mac_suffix: false
+  platformio_options:
+    board_build.flash_mode: dio    # DIO flash mode for compatibility
+  on_boot:
+    priority: -100
+    then:
+      # Restore saved speaker volume from flash
+      - lambda: |-
+          id(audio_component).set_volume(id(speaker_volume).state / 100.0);
+          ESP_LOGI("boot", "Applied saved volume: %.0f%%", id(speaker_volume).state);
+
+# ------------------------------------------------------------------------------
+# ESP32-S3 PLATFORM CONFIGURATION
+# ------------------------------------------------------------------------------
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+
+# PSRAM configuration for audio buffers
+psram:
+  mode: quad
+  speed: 80MHz
+
+# ==============================================================================
+# CONNECTIVITY
+# ==============================================================================
+
+# Home Assistant API connection
+api:
+  id: api_server
+
+# Over-the-air updates
+ota:
+  - platform: esphome
+
+# Web-based configuration interface
+web_server:
+  port: 80
+
+# Serial logging via UART0
+logger:
+  hardware_uart: UART0
+  level: DEBUG
+
+# WiFi configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Intercom-Mini Fallback"
+
+# ==============================================================================
+# mDNS SERVICE ADVERTISEMENT
+# Advertise this device as an intercom peer for automatic discovery
+# ==============================================================================
+mdns:
+  services:
+    - service: "_udp-intercom"
+      protocol: "_udp"
+      port: 12346
+      txt:
+        device: ${name}
+        type: "intercom"
+
+# ==============================================================================
+# EXTERNAL COMPONENTS
+# Local custom components for audio and discovery functionality
+# ==============================================================================
+external_components:
+  - source:
+      type: local
+      path: custom_components
+
+# ==============================================================================
+# mDNS DISCOVERY COMPONENT
+# Automatically discover other intercom devices on the local network
+# ==============================================================================
+mdns_discovery:
+  id: discovery_component
+  service_type: "_udp-intercom._udp"
+  scan_interval: 30s
+
+  # Callback when a new peer is discovered
+  on_peer_found:
+    - logger.log:
+        format: "Peer found: %s at %s"
+        args: ["name.c_str()", "ip.c_str()"]
+    - lambda: |-
+        // Auto-select first discovered peer if no target is set
+        if (id(target_peer_ip).state.empty()) {
+          auto call = id(target_peer_ip).make_call();
+          call.set_value(ip);
+          call.perform();
+          ESP_LOGI("p2p", "Auto-set target IP: %s", ip.c_str());
+        }
+
+  # Callback when a peer goes offline
+  on_peer_lost:
+    - logger.log:
+        format: "Peer lost: %s"
+        args: ["name.c_str()"]
+    - lambda: |-
+        // If current target is lost, switch to first available peer
+        std::string current = id(target_peer_ip).state;
+        auto& peers = id(discovery_component).get_peers();
+        bool found = false;
+        for (const auto& p : peers) {
+          if (p.ip == current) { found = true; break; }
+        }
+        if (!found && !peers.empty()) {
+          auto call = id(target_peer_ip).make_call();
+          call.set_value(peers[0].ip);
+          call.perform();
+        }
+
+# ==============================================================================
+# UDP CALL SIGNALING
+# Broadcast-based signaling for P2P call initiation and termination
+# Protocol: Simple text-based messages over UDP broadcast (port 12350)
+# ==============================================================================
+udp:
+  id: call_signaling
+  port: 12350
+  addresses:
+    - 255.255.255.255    # Broadcast to all devices on subnet
+  on_receive:
+    then:
+      - logger.log:
+          format: "UDP signaling received: %d bytes"
+          args: ["data.size()"]
+      - lambda: |-
+          std::string msg(data.begin(), data.end());
+          ESP_LOGI("call", "Message: %s", msg.c_str());
+
+          // ====== HANGUP MESSAGE ======
+          // Format: HANGUP:sender_name:sender_ip
+          // Received when remote peer terminates the call
+          if (msg.rfind("HANGUP:", 0) == 0) {
+            size_t p1 = msg.find(':', 7);
+            if (p1 == std::string::npos) return;
+            std::string peer_name = msg.substr(7, p1 - 7);
+            std::string peer_ip = msg.substr(p1 + 1);
+
+            ESP_LOGI("call", "HANGUP from %s (%s)", peer_name.c_str(), peer_ip.c_str());
+
+            // Stop streaming if this hangup is from our active peer
+            if (peer_ip == id(target_peer_ip).state && id(audio_component).is_streaming()) {
+              ESP_LOGI("call", "Remote peer ended call, stopping stream");
+              id(audio_component).stop();
+            }
+            return;
+          }
+
+          // ====== CALL REQUEST MESSAGE ======
+          // Format: CALL:caller_name:caller_ip:target_name
+          // Received when a remote peer wants to initiate a call with us
+          if (msg.rfind("CALL:", 0) != 0) return;
+
+          size_t p1 = msg.find(':', 5);
+          size_t p2 = msg.find(':', p1 + 1);
+          if (p1 == std::string::npos || p2 == std::string::npos) return;
+
+          std::string caller_name = msg.substr(5, p1 - 5);
+          std::string caller_ip = msg.substr(p1 + 1, p2 - p1 - 1);
+          std::string target_name = msg.substr(p2 + 1);
+
+          ESP_LOGI("call", "Incoming call from %s (%s) for %s",
+                   caller_name.c_str(), caller_ip.c_str(), target_name.c_str());
+
+          // Verify this call is intended for us
+          if (target_name != "${name}") return;
+
+          // Reject if already in a call
+          if (id(audio_component).is_streaming()) {
+            ESP_LOGW("call", "Already in call, ignoring incoming request");
+            return;
+          }
+
+          // Only auto-answer mode responds automatically
+          if (id(operating_mode).current_option() != "P2P Auto Answer") {
+            ESP_LOGI("call", "Not in Auto Answer mode, ignoring");
+            return;
+          }
+
+          // Accept the call: set peer IP and start streaming
+          ESP_LOGI("call", "Auto-answering call from %s", caller_name.c_str());
+          id(target_peer_ip).make_call().set_value(caller_ip).perform();
+          id(audio_component).start();
+
+# ==============================================================================
+# I2S AUDIO UDP COMPONENT
+# Core audio streaming bridge: I2S hardware <-> UDP network
+# Uses dual I2S bus configuration for separate mic and speaker hardware
+# ==============================================================================
+i2s_audio_udp:
+  id: audio_component
+
+  # INMP441 MEMS Microphone (I2S_NUM_0)
+  # 32-bit samples with 18-bit precision, MSB-first, left channel
+  mic_lrclk_pin: GPIO3            # Word Select (Left/Right Clock)
+  mic_bclk_pin: GPIO2             # Bit Clock
+  mic_din_pin: GPIO4              # Serial Data from microphone
+
+  # MAX98357A I2S Amplifier (I2S_NUM_1)
+  # 16-bit stereo input, mono output to speaker
+  speaker_lrclk_pin: GPIO6        # Word Select (Left/Right Clock)
+  speaker_bclk_pin: GPIO7         # Bit Clock
+  speaker_dout_pin: GPIO8         # Serial Data to amplifier
+
+  sample_rate: 16000              # 16kHz for voice quality
+
+  # INMP441 specific configuration
+  mic_bits_per_sample: 32         # INMP441 outputs 32-bit frames (18-bit data)
+  mic_channel: left               # L/R pin tied to GND = left channel
+  mic_gain: 4                     # Digital gain to normalize mic level
+
+  # Network configuration - values read dynamically from UI entities
+  remote_ip: !lambda 'return id(target_peer_ip).state;'
+  remote_port: !lambda 'return (uint16_t)id(target_peer_port).state;'
+  listen_port: ${p2p_port}
+
+  # Callback when streaming starts
+  on_start:
+    - lambda: |-
+        id(call_active_flag) = true;
+        ESP_LOGI("audio", "Streaming started");
+    - light.turn_on:
+        id: status_led
+        brightness: 100%
+        red: 0
+        green: 1
+        blue: 0
+        effect: "None"
+
+  # Callback when streaming stops
+  on_stop:
+    - lambda: |-
+        id(call_active_flag) = false;
+        ESP_LOGI("audio", "Streaming stopped");
+        // Send HANGUP signal to peer (only in P2P mode, not go2rtc)
+        if (id(operating_mode).current_option() != "go2rtc") {
+          auto ips = wifi::global_wifi_component->get_ip_addresses();
+          std::string our_ip = ips.empty() ? "" : ips[0].str();
+          std::string msg = "HANGUP:${name}:" + our_ip;
+          id(call_message) = msg;
+          ESP_LOGI("call", "Sending HANGUP signal");
+        }
+    - if:
+        condition:
+          lambda: 'return id(operating_mode).current_option() != "go2rtc";'
+        then:
+          - udp.write:
+              id: call_signaling
+              data: !lambda 'return std::vector<uint8_t>(id(call_message).begin(), id(call_message).end());'
+    - light.turn_off: status_led
+
+  # Error handling callback
+  on_error:
+    - logger.log:
+        format: "Audio error: %s"
+        args: ["error.c_str()"]
+    - light.turn_on:
+        id: status_led
+        red: 1
+        green: 0
+        blue: 0
+
+# ==============================================================================
+# SENSORS
+# ==============================================================================
+sensor:
+  # WiFi signal strength for connectivity monitoring
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_db
+    update_interval: 30s
+    entity_category: diagnostic
+
+  # Audio streaming packet counters
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_component
+    tx_packets:
+      name: "TX Packets"
+      id: tx_packets
+    rx_packets:
+      name: "RX Packets"
+      id: rx_packets
+
+  # Number of discovered peers on the network
+  - platform: mdns_discovery
+    mdns_discovery_id: discovery_component
+    peer_count:
+      name: "Peer Count"
+      id: peer_count
+
+# ==============================================================================
+# TEXT SENSORS
+# ==============================================================================
+text_sensor:
+  # Current audio mode (TX_ONLY, RX_ONLY, or FULL_DUPLEX)
+  - platform: i2s_audio_udp
+    i2s_audio_udp_id: audio_component
+    audio_mode:
+      name: "Audio Mode"
+
+  # List of discovered peer devices
+  - platform: mdns_discovery
+    mdns_discovery_id: discovery_component
+    peers_list:
+      name: "Discovered Peers"
+      id: discovered_peers_text
+      entity_category: diagnostic
+
+  # Currently selected peer (name and IP)
+  - platform: template
+    name: "Current Peer"
+    id: current_peer_text
+    icon: "mdi:account-check"
+    update_interval: 2s
+    lambda: |-
+      std::string target_ip = id(target_peer_ip).state;
+      if (target_ip.empty()) return std::string("(none)");
+      auto& peers = id(discovery_component).get_peers();
+      for (const auto& peer : peers) {
+        if (peer.ip == target_ip) {
+          return peer.name + " (" + peer.ip + ")";
+        }
+      }
+      return std::string("IP: ") + target_ip;
+
+  # Current streaming state
+  - platform: template
+    name: "State"
+    id: state_text
+    update_interval: 1s
+    lambda: |-
+      if (id(call_active_flag)) return std::string("STREAMING");
+      return std::string("IDLE");
+
+# ==============================================================================
+# BINARY SENSORS
+# ==============================================================================
+binary_sensor:
+  # Template sensor exposing call active state to Home Assistant
+  - platform: template
+    name: "Call Active"
+    id: call_active_sensor
+    lambda: return id(call_active_flag);
+
+# ==============================================================================
+# GLOBAL VARIABLES
+# ==============================================================================
+globals:
+  # Call active flag (for UI and sensors)
+  - id: call_active_flag
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  # Temporary buffer for UDP signaling messages
+  - id: call_message
+    type: std::string
+    restore_value: false
+
+# ==============================================================================
+# SELECT ENTITIES
+# ==============================================================================
+select:
+  # Operating mode selection
+  - platform: template
+    name: "Operating Mode"
+    id: operating_mode
+    icon: "mdi:swap-horizontal"
+    optimistic: true
+    restore_value: true
+    options:
+      - "go2rtc"           # Connect to go2rtc server on Home Assistant
+      - "P2P"              # Direct peer-to-peer (manual call initiation)
+      - "P2P Auto Answer"  # P2P with automatic incoming call answering
+    initial_option: "P2P Auto Answer"
+    on_value:
+      then:
+        - lambda: |-
+            if (x == "go2rtc") {
+              // go2rtc mode: set Home Assistant IP and go2rtc port
+              id(target_peer_ip).make_call().set_value("${ha_ip}").perform();
+              id(target_peer_port).make_call().set_value(${go2rtc_port}).perform();
+              ESP_LOGI("mode", "go2rtc mode: IP=${ha_ip} Port=${go2rtc_port}");
+            } else {
+              // P2P mode: use fixed P2P port, IP from discovery or manual
+              id(target_peer_port).make_call().set_value(${p2p_port}).perform();
+              ESP_LOGI("mode", "P2P mode: Port=${p2p_port}");
+            }
+
+# ==============================================================================
+# TEXT INPUT
+# ==============================================================================
+text:
+  # Target peer IP address (manual entry or auto-filled by discovery)
+  - platform: template
+    name: "Target IP"
+    id: target_peer_ip
+    icon: "mdi:ip-network"
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    mode: text
+    min_length: 0
+    max_length: 15
+
+# ==============================================================================
+# SWITCHES
+# ==============================================================================
+switch:
+  # Main streaming control switch (exposed to Home Assistant)
+  - platform: template
+    name: "Streaming"
+    id: streaming_switch
+    icon: "mdi:phone"
+    turn_on_action:
+      # Validate target IP is set in P2P mode
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(operating_mode).current_option() != "go2rtc";'
+              - lambda: 'return id(target_peer_ip).state.empty();'
+          then:
+            - logger.log:
+                level: WARN
+                format: "P2P mode requires target IP to be set"
+          else:
+            # Send CALL signal to peer (P2P mode only)
+            - if:
+                condition:
+                  lambda: 'return id(operating_mode).current_option() != "go2rtc";'
+                then:
+                  - lambda: |-
+                      std::string target = id(target_peer_ip).state;
+                      std::string target_name = target;
+                      // Resolve IP to peer name if available
+                      auto& peers = id(discovery_component).get_peers();
+                      for (const auto& p : peers) {
+                        if (p.ip == target) { target_name = p.name; break; }
+                      }
+                      auto ips = wifi::global_wifi_component->get_ip_addresses();
+                      std::string our_ip = ips.empty() ? "" : ips[0].str();
+                      std::string msg = "CALL:${name}:" + our_ip + ":" + target_name;
+                      id(call_message) = msg;
+                      ESP_LOGI("call", "Calling %s (%s)", target_name.c_str(), target.c_str());
+                  - udp.write:
+                      id: call_signaling
+                      data: !lambda 'return std::vector<uint8_t>(id(call_message).begin(), id(call_message).end());'
+            # Start audio streaming
+            - i2s_audio_udp.start:
+                id: audio_component
+    turn_off_action:
+      - i2s_audio_udp.stop:
+          id: audio_component
+    lambda: return id(audio_component).is_streaming();
+
+# ==============================================================================
+# NUMBER ENTITIES
+# ==============================================================================
+number:
+  # Target peer UDP port
+  - platform: template
+    name: "Target Port"
+    id: target_peer_port
+    min_value: 1024
+    max_value: 65535
+    step: 1
+    initial_value: ${p2p_port}
+    optimistic: true
+    restore_value: true
+    entity_category: diagnostic
+    icon: "mdi:wan"
+
+  # Speaker volume control (0-100%, software digital gain)
+  - platform: template
+    name: "Speaker Volume"
+    id: speaker_volume
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 70
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    icon: "mdi:volume-high"
+    set_action:
+      - lambda: |-
+          // Software volume control (digital gain applied in audio component)
+          id(audio_component).set_volume(x / 100.0);
+          ESP_LOGI("volume", "Volume set to %.0f%%", x);
+
+# ==============================================================================
+# BUTTONS
+# ==============================================================================
+button:
+  # Force immediate mDNS peer scan
+  - platform: template
+    name: "Refresh Peers"
+    icon: "mdi:refresh"
+    on_press:
+      - lambda: id(discovery_component).scan_now();
+
+  # Cycle to next discovered peer
+  - platform: template
+    name: "Next Peer"
+    icon: "mdi:account-arrow-right"
+    on_press:
+      - lambda: |-
+          auto& peers = id(discovery_component).get_peers();
+          if (peers.empty()) {
+            ESP_LOGW("peer", "No peers available");
+            return;
+          }
+          std::string current_ip = id(target_peer_ip).state;
+          int current_idx = -1;
+          for (size_t i = 0; i < peers.size(); i++) {
+            if (peers[i].ip == current_ip) {
+              current_idx = i;
+              break;
+            }
+          }
+          int next_idx = (current_idx + 1) % peers.size();
+          auto call = id(target_peer_ip).make_call();
+          call.set_value(peers[next_idx].ip);
+          call.perform();
+          ESP_LOGI("peer", "Selected peer: %s", peers[next_idx].name.c_str());
+
+  # Device restart button
+  - platform: restart
+    name: "Restart"
+
+# ==============================================================================
+# STATUS LED (WS2812 RGB on GPIO21)
+# Provides visual feedback for device and call state
+# ==============================================================================
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "Status LED"
+    pin: GPIO21
+    chipset: WS2812
+    num_leds: 1
+    rgb_order: RGB
+    effects:
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 0.3s
+          update_interval: 0.3s
+          min_brightness: 0%
+          max_brightness: 100%
